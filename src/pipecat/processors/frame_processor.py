@@ -12,6 +12,7 @@ management, and frame flow control mechanisms.
 """
 
 import asyncio
+import dataclasses
 import traceback
 from dataclasses import dataclass
 from enum import Enum
@@ -773,7 +774,8 @@ class FrameProcessor(BaseObject):
         """Broadcasts a frame of the specified class upstream and downstream.
 
         This method creates two instances of the given frame class using the
-        provided keyword arguments and pushes them upstream and downstream.
+        provided keyword arguments (without deep-copying them) and pushes them
+        upstream and downstream.
 
         Args:
             frame_cls: The class of the frame to be broadcasted.
@@ -781,6 +783,38 @@ class FrameProcessor(BaseObject):
         """
         await self.push_frame(frame_cls(**kwargs))
         await self.push_frame(frame_cls(**kwargs), FrameDirection.UPSTREAM)
+
+    async def broadcast_frame_instance(self, frame: Frame):
+        """Broadcasts a frame instance upstream and downstream.
+
+        This method creates two new frame instances shallow-copying all fields
+        from the original frame except `id` and `name`, which get fresh values.
+
+        Args:
+            frame: The frame instance to broadcast.
+
+        Note:
+            Prefer using `broadcast_frame()` when possible, as it is more
+            efficient. This method should only be used when you are not the
+            creator of the frame and need to broadcast an existing instance.
+        """
+        frame_cls = type(frame)
+        init_fields = {f.name: getattr(frame, f.name) for f in dataclasses.fields(frame) if f.init}
+        extra_fields = {
+            f.name: getattr(frame, f.name)
+            for f in dataclasses.fields(frame)
+            if not f.init and f.name not in ("id", "name")
+        }
+
+        new_frame = frame_cls(**init_fields)
+        for k, v in extra_fields.items():
+            setattr(new_frame, k, v)
+        await self.push_frame(new_frame)
+
+        new_frame = frame_cls(**init_fields)
+        for k, v in extra_fields.items():
+            setattr(new_frame, k, v)
+        await self.push_frame(new_frame, FrameDirection.UPSTREAM)
 
     async def __start(self, frame: StartFrame):
         """Handle the start frame to initialize processor state.
