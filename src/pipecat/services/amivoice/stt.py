@@ -142,8 +142,8 @@ class AmiVoiceSTTService(WebsocketSTTService):
             frame: The start frame containing initialization parameters.
         """
         await super().start(frame)
-        # 1 second of 16-bit mono audio at sample_rate
-        self._audio_buffer_max_size = self.sample_rate * 2
+        # 2 seconds of 16-bit mono audio at sample_rate
+        self._audio_buffer_max_size = self.sample_rate * 4
         await self._connect()
 
     async def stop(self, frame: EndFrame):
@@ -207,8 +207,10 @@ class AmiVoiceSTTService(WebsocketSTTService):
             if self._websocket and self._websocket.state is State.OPEN:
                 # p command: 'p' prefix + binary audio data
                 await self._websocket.send(b"p" + audio)
-        else:
-            # Buffer audio before VAD detection (keep max ~1 second)
+        elif not self._session_ending:
+            # Buffer audio before VAD detection (keep max ~2 seconds)
+            # Don't buffer while session is ending to prevent previous turn's
+            # audio from leaking into the next turn
             self._audio_buffer.extend(audio)
             if len(self._audio_buffer) > self._audio_buffer_max_size:
                 excess = len(self._audio_buffer) - self._audio_buffer_max_size
@@ -391,6 +393,7 @@ class AmiVoiceSTTService(WebsocketSTTService):
             # Session end response
             self._session_active = False
             self._session_ending = False  # Allow new session to start
+            self._audio_buffer.clear()  # Ensure clean buffer for next turn
             if payload:
                 await self.push_error(error_msg=f"AmiVoice session end error: {payload}")
             else:
