@@ -92,7 +92,7 @@ class SonioxInputParams(BaseModel):
         client_reference_id: Client reference ID to use for transcription.
     """
 
-    model: str = "stt-rt-v4"
+    model: str = "stt-rt-v3"
 
     audio_format: Optional[str] = "pcm_s16le"
     num_channels: Optional[int] = 1
