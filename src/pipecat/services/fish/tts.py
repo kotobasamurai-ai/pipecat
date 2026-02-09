@@ -10,6 +10,7 @@ This module provides integration with Fish Audio's real-time TTS WebSocket API
 for streaming text-to-speech synthesis with customizable voice parameters.
 """
 
+import asyncio
 import uuid
 from typing import AsyncGenerator, Literal, Optional
 
@@ -244,7 +245,12 @@ class FishAudioTTSService(InterruptibleTTSService):
                 # Send stop event with ormsgpack
                 stop_message = {"event": "stop"}
                 await self._websocket.send(ormsgpack.packb(stop_message))
-                await self._websocket.close()
+                # Fire-and-forget: websocket.close() blocks 1-3s waiting for
+                # Fish Audio's server to complete the close handshake, which
+                # delays InterruptionFrame propagation and causes speech to
+                # continue playing after user interrupts.
+                ws = self._websocket
+                asyncio.create_task(ws.close())
         except Exception as e:
             await self.push_error(error_msg=f"Unknown error occurred: {e}", exception=e)
         finally:
