@@ -11,6 +11,7 @@ the AmiVoice Cloud Platform API for real-time speech recognition.
 """
 
 import json
+import uuid
 from enum import Enum
 from typing import AsyncGenerator, Optional
 
@@ -102,6 +103,7 @@ class AmiVoiceSTTService(WebsocketSTTService):
         url: str = "wss://acp-api.amivoice.com/v1/nolog/",
         sample_rate: Optional[int] = 16000,
         params: Optional[AmiVoiceInputParams] = None,
+        ttfs_p99_latency: Optional[float] = None,
         **kwargs,
     ):
         """Initialize the AmiVoice STT service.
@@ -112,9 +114,10 @@ class AmiVoiceSTTService(WebsocketSTTService):
                 for logging enabled, or "wss://acp-api.amivoice.com/v1/nolog/" for no logging.
             sample_rate: Audio sample rate. Defaults to 16000 Hz.
             params: Additional configuration parameters.
+            ttfs_p99_latency: P99 latency from speech end to final transcript in seconds.
             **kwargs: Additional arguments passed to WebsocketSTTService.
         """
-        super().__init__(sample_rate=sample_rate, **kwargs)
+        super().__init__(sample_rate=sample_rate, ttfs_p99_latency=ttfs_p99_latency, **kwargs)
         self._params = params or AmiVoiceInputParams()
 
         self._api_key = api_key
@@ -133,6 +136,8 @@ class AmiVoiceSTTService(WebsocketSTTService):
         self._streaming_buffer = bytearray()
         self._chunk_size_ms = self._params.chunk_size_ms
         self._chunk_size_bytes = 0  # Computed in start()
+
+        self._session_context_id: Optional[str] = None
 
     def can_generate_metrics(self) -> bool:
         """Check if the service can generate processing metrics.
@@ -234,12 +239,15 @@ class AmiVoiceSTTService(WebsocketSTTService):
     async def _connect(self):
         """Connect to the AmiVoice WebSocket server."""
         await self._connect_websocket()
+        await super()._connect()
 
         if self._websocket and not self._receive_task:
             self._receive_task = self.create_task(self._receive_task_handler(self._report_error))
 
     async def _disconnect(self):
         """Disconnect from the AmiVoice WebSocket server."""
+        await super()._disconnect()
+
         if self._receive_task:
             await self.cancel_task(self._receive_task)
             self._receive_task = None
@@ -295,6 +303,7 @@ class AmiVoiceSTTService(WebsocketSTTService):
         logger.debug(f"Starting AmiVoice session: {s_command[:50]}...")
         await self._websocket.send(s_command)
         self._session_active = True
+        self._session_context_id = str(uuid.uuid4())
 
         # Send buffered audio captured before VAD detection
         if self._audio_buffer:
@@ -415,6 +424,7 @@ class AmiVoiceSTTService(WebsocketSTTService):
             # Session end response
             self._session_active = False
             self._session_ending = False  # Allow new session to start
+            self._session_context_id = None
             self._audio_buffer.clear()  # Ensure clean buffer for next turn
             self._streaming_buffer.clear()  # Ensure clean streaming buffer
             if payload:
@@ -469,6 +479,8 @@ class AmiVoiceSTTService(WebsocketSTTService):
 
             # Skip if text is empty or contains only dots (AmiVoice placeholder)
             if text and text.strip('.'):
+                if self._session_context_id:
+                    data["context_id"] = self._session_context_id
                 await self.stop_ttfb_metrics()
                 await self.push_frame(
                     InterimTranscriptionFrame(
@@ -495,6 +507,8 @@ class AmiVoiceSTTService(WebsocketSTTService):
             text = self._extract_text(data)
 
             if text:
+                if self._session_context_id:
+                    data["context_id"] = self._session_context_id
                 await self.stop_ttfb_metrics()
                 await self.push_frame(
                     TranscriptionFrame(
