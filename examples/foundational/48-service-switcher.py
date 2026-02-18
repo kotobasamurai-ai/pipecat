@@ -34,6 +34,7 @@ from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.deepgram.tts import DeepgramTTSService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.llm_service import FunctionCallParams
+from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.daily.transport import DailyParams
@@ -115,8 +116,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
 
     llm_openai = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"))
     llm_google = GoogleLLMService(api_key=os.getenv("GOOGLE_API_KEY"))
+    llm_anthropic = AnthropicLLMService(
+        api_key=os.getenv("ANTHROPIC_API_KEY"), model="claude-sonnet-4-6"
+    )
     llm_switcher = LLMSwitcher(
-        llms=[llm_openai, llm_google], strategy_type=ServiceSwitcherStrategyManual
+        llms=[llm_openai, llm_google, llm_anthropic],
+        strategy_type=ServiceSwitcherStrategyManual,
     )
     # Register a "classic" function
     llm_switcher.register_function("get_current_weather", fetch_weather_from_api)
@@ -175,6 +180,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         await asyncio.sleep(15)
         print(f"Switching to {llm_google}")
         await task.queue_frames([ManuallySwitchServiceFrame(service=llm_google)])
+        await asyncio.sleep(15)
+        print(f"Switching to {llm_anthropic}")
+        await task.queue_frames([ManuallySwitchServiceFrame(service=llm_anthropic)])
         await asyncio.sleep(15)
         print(f"Switching to {tts_deepgram}")
         await task.queue_frames([ManuallySwitchServiceFrame(service=tts_deepgram)])
