@@ -297,6 +297,11 @@ class UserTurnCompletionLLMServiceMixin:
             # Timeout was cancelled (user spoke or interruption)
             pass
 
+    async def cancel_pending_turn_completion(self):
+        """Cancel any pending incomplete turn timeout and reset state."""
+        await self._cancel_incomplete_timeout()
+        await self._turn_reset()
+
     async def _turn_reset(self):
         """Reset turn completion state between responses.
 
