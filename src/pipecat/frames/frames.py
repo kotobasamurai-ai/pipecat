@@ -123,6 +123,9 @@ class Frame:
         id: Unique identifier for the frame instance.
         name: Human-readable name combining class name and instance count.
         pts: Presentation timestamp in nanoseconds.
+        broadcast_sibling_id: ID of the paired frame when this frame was
+            broadcast in both directions. Set automatically by
+            ``broadcast_frame()`` and ``broadcast_frame_instance()``.
         metadata: Dictionary for arbitrary frame metadata.
         transport_source: Name of the transport source that created this frame.
         transport_destination: Name of the transport destination for this frame.
@@ -131,6 +134,7 @@ class Frame:
     id: int = field(init=False)
     name: str = field(init=False)
     pts: Optional[int] = field(init=False)
+    broadcast_sibling_id: Optional[int] = field(init=False)
     metadata: Dict[str, Any] = field(init=False)
     transport_source: Optional[str] = field(init=False)
     transport_destination: Optional[str] = field(init=False)
@@ -139,6 +143,7 @@ class Frame:
         self.id: int = obj_id()
         self.name: str = f"{self.__class__.__name__}#{obj_count(self)}"
         self.pts: Optional[int] = None
+        self.broadcast_sibling_id: Optional[int] = None
         self.metadata: Dict[str, Any] = {}
         self.transport_source: Optional[str] = None
         self.transport_destination: Optional[str] = None
@@ -2143,6 +2148,20 @@ class STTUpdateSettingsFrame(ServiceUpdateSettingsFrame):
     """Frame for updating STT service settings."""
 
     pass
+
+
+@dataclass
+class UserIdleTimeoutUpdateFrame(SystemFrame):
+    """Frame for updating the user idle timeout at runtime.
+
+    Setting timeout to 0 disables idle detection. Setting a positive value
+    enables it.
+
+    Parameters:
+        timeout: The new idle timeout in seconds. 0 disables idle detection.
+    """
+
+    timeout: float
 
 
 @dataclass
