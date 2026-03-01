@@ -10,6 +10,7 @@ This module provides a WebSocket-based STT service that integrates with
 the AmiVoice Cloud Platform API for real-time speech recognition.
 """
 
+import asyncio
 import json
 import uuid
 from enum import Enum
@@ -72,17 +73,27 @@ class AmiVoiceInputParams(BaseModel):
 
 
 def _audio_format_from_sample_rate(sample_rate: int) -> str:
-    """Get AmiVoice audio format string from sample rate.
+    """Get AmiVoice raw PCM audio format string from sample rate.
 
     Args:
         sample_rate: Audio sample rate in Hz.
 
     Returns:
-        AmiVoice audio format string ("8K" or "16K").
+        AmiVoice audio format string for headerless PCM data (e.g., "LSB16K").
     """
-    if sample_rate <= 8000:
-        return "8K"
-    return "16K"
+    exact_formats = {
+        8000: "LSB8K",
+        11025: "LSB11K",
+        16000: "LSB16K",
+        22050: "LSB22K",
+        32000: "LSB32K",
+        44100: "LSB44K",
+        48000: "LSB48K",
+    }
+    if sample_rate in exact_formats:
+        return exact_formats[sample_rate]
+    # Fallback to widely supported defaults.
+    return "LSB8K" if sample_rate <= 11025 else "LSB16K"
 
 
 class AmiVoiceSTTService(WebsocketSTTService):
@@ -126,7 +137,11 @@ class AmiVoiceSTTService(WebsocketSTTService):
 
         self._receive_task = None
         self._session_active = False
+        self._session_starting = False  # True while waiting for 's' response
         self._session_ending = False  # True while waiting for 'e' response
+        self._session_end_requested = False  # True if stop requested before 's' response
+        self._session_end_event = asyncio.Event()
+        self._session_end_event.set()  # Initially set: no need to wait
 
         # Audio buffer for capturing audio before VAD detection
         self._audio_buffer = bytearray()
@@ -221,14 +236,11 @@ class AmiVoiceSTTService(WebsocketSTTService):
         if self._session_active:
             self._streaming_buffer.extend(audio)
             if self._websocket and self._websocket.state is State.OPEN:
-                while len(self._streaming_buffer) >= self._chunk_size_bytes:
-                    chunk = bytes(self._streaming_buffer[: self._chunk_size_bytes])
-                    self._streaming_buffer = self._streaming_buffer[self._chunk_size_bytes :]
-                    await self._websocket.send(b"p" + chunk)
-        elif not self._session_ending:
+                await self._send_streaming_chunks()
+        else:
             # Buffer audio before VAD detection (keep max ~2 seconds)
-            # Don't buffer while session is ending to prevent previous turn's
-            # audio from leaking into the next turn
+            # Safe during _session_ending: _end_session() already cleared
+            # _audio_buffer, so only new turn audio is buffered here
             self._audio_buffer.extend(audio)
             if len(self._audio_buffer) > self._audio_buffer_max_size:
                 excess = len(self._audio_buffer) - self._audio_buffer_max_size
@@ -246,6 +258,12 @@ class AmiVoiceSTTService(WebsocketSTTService):
 
     async def _disconnect(self):
         """Disconnect from the AmiVoice WebSocket server."""
+        # Prevent deadlock: unblock any _start_session() waiting on session end
+        self._session_starting = False
+        self._session_ending = False
+        self._session_end_requested = False
+        self._session_end_event.set()
+
         await super()._disconnect()
 
         if self._receive_task:
@@ -282,10 +300,15 @@ class AmiVoiceSTTService(WebsocketSTTService):
 
     async def _start_session(self):
         """Start a new recognition session with s command."""
-        # Don't start new session while previous one is still ending
+        # Wait for previous session to finish ending before starting a new one
         if self._session_ending:
-            logger.debug("Waiting for previous session to end, skipping start")
-            return
+            logger.debug("Waiting for previous session to end before starting new one")
+            try:
+                await asyncio.wait_for(self._session_end_event.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                logger.warning("Timeout waiting for previous session to end, forcing reset")
+                self._session_ending = False
+                self._session_end_event.set()
 
         if not self._websocket or self._websocket.state is not State.OPEN:
             await self._connect_websocket()
@@ -301,17 +324,20 @@ class AmiVoiceSTTService(WebsocketSTTService):
         )
 
         logger.debug(f"Starting AmiVoice session: {s_command[:50]}...")
+        self._session_starting = True
+        self._session_active = False
+        self._session_end_requested = False
         await self._websocket.send(s_command)
-        self._session_active = True
         self._session_context_id = str(uuid.uuid4())
-
-        # Send buffered audio captured before VAD detection
-        if self._audio_buffer:
-            await self._websocket.send(b"p" + bytes(self._audio_buffer))
-            self._audio_buffer.clear()
 
     async def _end_session(self):
         """End the current recognition session with e command."""
+        if self._session_starting:
+            # Stop was requested before the server acknowledged session start.
+            # Defer 'e' until we receive a successful 's' response.
+            self._session_end_requested = True
+            return
+
         if self._websocket and self._websocket.state is State.OPEN and self._session_active:
             logger.debug("Ending AmiVoice session")
             # Order is critical to avoid "can't feed audio data" errors:
@@ -323,10 +349,18 @@ class AmiVoiceSTTService(WebsocketSTTService):
                 self._streaming_buffer.clear()
             # 3. Prevent new sessions until 'e' response
             self._session_ending = True
+            self._session_end_event.clear()  # Block _start_session() until 'e' response
             # 4. Clear pre-VAD buffer for next turn
             self._audio_buffer.clear()
             # 5. Send end command after all audio has been sent
             await self._websocket.send("e")
+
+    async def _send_streaming_chunks(self):
+        """Send buffered streaming audio in chunk-sized p packets."""
+        while len(self._streaming_buffer) >= self._chunk_size_bytes:
+            chunk = bytes(self._streaming_buffer[: self._chunk_size_bytes])
+            self._streaming_buffer = self._streaming_buffer[self._chunk_size_bytes :]
+            await self._websocket.send(b"p" + chunk)
 
     def _get_websocket(self):
         """Get the current WebSocket connection.
@@ -411,9 +445,22 @@ class AmiVoiceSTTService(WebsocketSTTService):
             if payload:
                 # Error case: "s <error_message>"
                 await self.push_error(error_msg=f"AmiVoice session error: {payload}")
+                self._session_starting = False
                 self._session_active = False
             else:
                 logger.debug("AmiVoice session started successfully")
+                self._session_starting = False
+                self._session_active = True
+
+                # Send audio accumulated while waiting for the s ack.
+                if self._audio_buffer:
+                    self._streaming_buffer.extend(self._audio_buffer)
+                    self._audio_buffer.clear()
+                await self._send_streaming_chunks()
+
+                if self._session_end_requested:
+                    self._session_end_requested = False
+                    await self._end_session()
 
         elif event_type == "p":
             # Audio receive response
@@ -422,8 +469,11 @@ class AmiVoiceSTTService(WebsocketSTTService):
 
         elif event_type == "e":
             # Session end response
+            self._session_starting = False
             self._session_active = False
-            self._session_ending = False  # Allow new session to start
+            self._session_ending = False
+            self._session_end_requested = False
+            self._session_end_event.set()  # Unblock waiting _start_session()
             self._session_context_id = None
             self._audio_buffer.clear()  # Ensure clean buffer for next turn
             self._streaming_buffer.clear()  # Ensure clean streaming buffer
