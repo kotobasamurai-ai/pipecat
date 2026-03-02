@@ -169,6 +169,7 @@ class FishAudioTTSService(InterruptibleTTSService):
             settings=FishAudioTTSSettings(
                 model=model_id,
                 voice=reference_id,
+                language=params.language,
                 fish_sample_rate=0,
                 latency=params.latency,
                 format=output_format,
