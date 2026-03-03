@@ -11,29 +11,18 @@ attributes to OpenTelemetry spans, following standard semantic conventions
 where applicable and Pipecat-specific conventions for additional context.
 """
 
-import dataclasses
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 # Import for type checking only
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
+    from pipecat.services.settings import ServiceSettings
+
 from pipecat.utils.tracing.setup import is_tracing_available
 
 if is_tracing_available():
     from opentelemetry.trace import Span
-
-
-def _settings_items(settings) -> list:
-    """Return (key, value) pairs from a settings object.
-
-    Works with both plain dicts and dataclass instances (e.g. ServiceSettings).
-    """
-    if hasattr(settings, "items"):
-        return list(settings.items())
-    if dataclasses.is_dataclass(settings) and not isinstance(settings, type):
-        return list(dataclasses.asdict(settings).items())
-    return []
 
 
 def _get_gen_ai_system_from_service_name(service_name: str) -> str:
@@ -81,7 +70,7 @@ def add_tts_span_attributes(
     model: str,
     voice_id: str,
     text: Optional[str] = None,
-    settings: Optional[Dict[str, Any]] = None,
+    settings: Optional["ServiceSettings"] = None,
     character_count: Optional[int] = None,
     operation_name: str = "tts",
     ttfb: Optional[float] = None,
@@ -120,7 +109,7 @@ def add_tts_span_attributes(
 
     # Add settings if provided
     if settings:
-        for key, value in _settings_items(settings):
+        for key, value in settings.given_fields().items():
             if isinstance(value, (str, int, float, bool)):
                 span.set_attribute(f"settings.{key}", value)
 
@@ -139,7 +128,7 @@ def add_stt_span_attributes(
     is_final: Optional[bool] = None,
     language: Optional[str] = None,
     user_id: Optional[str] = None,
-    settings: Optional[Dict[str, Any]] = None,
+    settings: Optional["ServiceSettings"] = None,
     vad_enabled: bool = False,
     ttfb: Optional[float] = None,
     **kwargs,
@@ -184,7 +173,7 @@ def add_stt_span_attributes(
 
     # Add settings if provided
     if settings:
-        for key, value in _settings_items(settings):
+        for key, value in settings.given_fields().items():
             if isinstance(value, (str, int, float, bool)):
                 span.set_attribute(f"settings.{key}", value)
 
@@ -295,7 +284,7 @@ def add_gemini_live_span_attributes(
     voice_id: Optional[str] = None,
     language: Optional[str] = None,
     modalities: Optional[str] = None,
-    settings: Optional[Dict[str, Any]] = None,
+    settings: Optional["ServiceSettings"] = None,
     tools: Optional[List[Dict]] = None,
     tools_serialized: Optional[str] = None,
     transcript: Optional[str] = None,
@@ -372,7 +361,7 @@ def add_gemini_live_span_attributes(
 
     # Add settings if provided
     if settings:
-        for key, value in _settings_items(settings):
+        for key, value in settings.given_fields().items():
             if isinstance(value, (str, int, float, bool)):
                 span.set_attribute(f"settings.{key}", value)
             elif key == "vad" and value:
