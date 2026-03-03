@@ -11,6 +11,7 @@ attributes to OpenTelemetry spans, following standard semantic conventions
 where applicable and Pipecat-specific conventions for additional context.
 """
 
+import dataclasses
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 # Import for type checking only
@@ -21,6 +22,18 @@ from pipecat.utils.tracing.setup import is_tracing_available
 
 if is_tracing_available():
     from opentelemetry.trace import Span
+
+
+def _settings_items(settings) -> list:
+    """Return (key, value) pairs from a settings object.
+
+    Works with both plain dicts and dataclass instances (e.g. ServiceSettings).
+    """
+    if hasattr(settings, "items"):
+        return list(settings.items())
+    if dataclasses.is_dataclass(settings) and not isinstance(settings, type):
+        return list(dataclasses.asdict(settings).items())
+    return []
 
 
 def _get_gen_ai_system_from_service_name(service_name: str) -> str:
@@ -107,7 +120,7 @@ def add_tts_span_attributes(
 
     # Add settings if provided
     if settings:
-        for key, value in settings.items():
+        for key, value in _settings_items(settings):
             if isinstance(value, (str, int, float, bool)):
                 span.set_attribute(f"settings.{key}", value)
 
@@ -171,7 +184,7 @@ def add_stt_span_attributes(
 
     # Add settings if provided
     if settings:
-        for key, value in settings.items():
+        for key, value in _settings_items(settings):
             if isinstance(value, (str, int, float, bool)):
                 span.set_attribute(f"settings.{key}", value)
 
@@ -359,7 +372,7 @@ def add_gemini_live_span_attributes(
 
     # Add settings if provided
     if settings:
-        for key, value in settings.items():
+        for key, value in _settings_items(settings):
             if isinstance(value, (str, int, float, bool)):
                 span.set_attribute(f"settings.{key}", value)
             elif key == "vad" and value:
