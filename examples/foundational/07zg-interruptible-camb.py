@@ -56,21 +56,19 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
 
     tts = CambTTSService(
         api_key=os.getenv("CAMB_API_KEY"),
-        model="mars-flash",
+        settings=CambTTSService.Settings(
+            model="mars-flash",
+        ),
     )
 
-    llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"))
+    llm = OpenAILLMService(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        settings=OpenAILLMService.Settings(
+            system_instruction="You are a helpful voice assistant powered by Camb AI text-to-speech. ",
+        ),
+    )
 
-    messages = [
-        {
-            "role": "system",
-            "content": "You are a helpful voice assistant powered by Camb AI text-to-speech. "
-            "Keep your responses concise and conversational since they will be spoken aloud. "
-            "Avoid special characters, emojis, or bullet points.",
-        },
-    ]
-
-    context = LLMContext(messages)
+    context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
@@ -101,7 +99,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Client connected")
-        messages.append({"role": "system", "content": "Please introduce yourself to the user."})
+        context.add_message({"role": "user", "content": "Please introduce yourself to the user."})
         await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")

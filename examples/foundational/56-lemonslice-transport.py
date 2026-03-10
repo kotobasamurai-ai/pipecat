@@ -55,21 +55,21 @@ async def main():
 
         stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
 
-        llm = GroqLLMService(api_key=os.getenv("GROQ_API_KEY"))
+        llm = GroqLLMService(
+            api_key=os.getenv("GROQ_API_KEY"),
+            settings=GroqLLMService.Settings(
+                system_instruction="You are a helpful LLM in a WebRTC call. Your goal is to demonstrate your capabilities in a succinct way. Your output will be spoken aloud, so avoid special characters that can't easily be spoken, such as emojis or bullet points. Respond to what the user said in a creative and helpful way.",
+            ),
+        )
 
         tts = ElevenLabsTTSService(
             api_key=os.getenv("ELEVENLABS_API_KEY", ""),
-            voice_id=os.getenv("ELEVENLABS_VOICE_ID", ""),
+            settings=ElevenLabsTTSService.Settings(
+                voice="71a7ad14-091c-4e8e-a314-022ece01c121",  # British Reading Lady
+            ),
         )
 
-        messages = [
-            {
-                "role": "system",
-                "content": "You are a helpful LLM in a WebRTC call. Your goal is to demonstrate your capabilities in a succinct way. Your output will be spoken aloud, so avoid special characters that can't easily be spoken, such as emojis or bullet points. Respond to what the user said in a creative and helpful way.",
-            },
-        ]
-
-        context = LLMContext(messages)
+        context = LLMContext()
         user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
             context,
             user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
@@ -101,9 +101,9 @@ async def main():
         async def on_client_connected(transport, participant):
             logger.info("Client connected")
             # Kick off the conversation.
-            messages.append(
+            context.add_message(
                 {
-                    "role": "system",
+                    "role": "user",
                     "content": "Start by greeting the user and ask how you can help.",
                 }
             )

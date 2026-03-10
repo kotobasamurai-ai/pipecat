@@ -43,17 +43,23 @@ class SwitchVoices(ParallelPipeline):
 
         news_lady = CartesiaTTSService(
             api_key=os.getenv("CARTESIA_API_KEY"),
-            voice_id="bf991597-6c13-47e4-8411-91ec2de5c466",  # Newslady
+            settings=CartesiaTTSService.Settings(
+                voice="bf991597-6c13-47e4-8411-91ec2de5c466",  # Newslady
+            ),
         )
 
         british_lady = CartesiaTTSService(
             api_key=os.getenv("CARTESIA_API_KEY"),
-            voice_id="71a7ad14-091c-4e8e-a314-022ece01c121",  # British Reading Lady
+            settings=CartesiaTTSService.Settings(
+                voice="71a7ad14-091c-4e8e-a314-022ece01c121",  # British Reading Lady
+            ),
         )
 
         barbershop_man = CartesiaTTSService(
             api_key=os.getenv("CARTESIA_API_KEY"),
-            voice_id="a0e99841-438c-4a64-b679-ae501e7d6091",  # Barbershop Man
+            settings=CartesiaTTSService.Settings(
+                voice="a0e99841-438c-4a64-b679-ae501e7d6091",  # Barbershop Man
+            ),
         )
 
         super().__init__(
@@ -112,7 +118,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
 
     tts = SwitchVoices()
 
-    llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"))
+    llm = OpenAILLMService(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        settings=OpenAILLMService.Settings(
+            system_instruction="You are a helpful LLM in a WebRTC call. Your goal is to demonstrate your capabilities. Respond to what the user said in a creative and helpful way. Your output should not include non-alphanumeric characters. You can do the following voices: 'News Lady', 'British Lady' and 'Barbershop Man'.",
+        ),
+    )
     llm.register_function("switch_voice", tts.switch_voice)
 
     switch_voice_function = FunctionSchema(
@@ -128,14 +139,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     )
     tools = ToolsSchema(standard_tools=[switch_voice_function])
 
-    messages = [
-        {
-            "role": "system",
-            "content": "You are a helpful LLM in a WebRTC call. Your goal is to demonstrate your capabilities. Respond to what the user said in a creative and helpful way. Your output should not include non-alphanumeric characters. You can do the following voices: 'News Lady', 'British Lady' and 'Barbershop Man'.",
-        },
-    ]
-
-    context = LLMContext(messages, tools)
+    context = LLMContext(tools=tools)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
@@ -166,9 +170,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     async def on_client_connected(transport, client):
         logger.info(f"Client connected")
         # Kick off the conversation.
-        messages.append(
+        context.add_message(
             {
-                "role": "system",
+                "role": "user",
                 "content": f"Please introduce yourself to the user and let them know the voices you can do. Your initial responses should be as if you were a {tts.current_voice}.",
             }
         )

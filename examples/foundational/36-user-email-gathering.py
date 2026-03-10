@@ -67,7 +67,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     # (see https://docs.cartesia.ai/build-with-sonic/formatting-text-for-sonic/spelling-out-input-text)
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),
-        voice_id="71a7ad14-091c-4e8e-a314-022ece01c121",  # British Reading Lady
+        settings=CartesiaTTSService.Settings(
+            voice="71a7ad14-091c-4e8e-a314-022ece01c121",  # British Reading Lady
+        ),
     )
 
     # Rime offers a function `spell()` that we can use to ask the user
@@ -75,11 +77,18 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     # (see https://docs.rime.ai/api-reference/spell)
     # tts = RimeHttpTTSService(
     #     api_key=os.getenv("RIME_API_KEY", ""),
-    #     voice_id="eva",
+    #     settings=RimeTTSSettings(
+    #         voice="eva",
+    #     ),
     #     aiohttp_session=session,
     # )
 
-    llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"))
+    llm = OpenAILLMService(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        settings=OpenAILLMService.Settings(
+            system_instruction="You need to gather a valid email or emails from the user. Your output will be spoken aloud, so avoid special characters that can't easily be spoken, such as emojis or bullet points. If the user provides one or more email addresses confirm them with the user. Enclose all emails with <spell> tags, for example <spell>a@a.com</spell>.",
+        ),
+    )
     # You can aslo register a function_name of None to get all functions
     # sent to the same callback with an additional function_name parameter.
     llm.register_function("store_user_emails", store_user_emails)
@@ -98,17 +107,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     )
     tools = ToolsSchema(standard_tools=[store_emails_function])
 
-    messages = [
-        {
-            "role": "system",
-            # Cartesia <spell></spell>
-            "content": "You need to gather a valid email or emails from the user. Your output will be spoken aloud, so avoid special characters that can't easily be spoken, such as emojis or bullet points. If the user provides one or more email addresses confirm them with the user. Enclose all emails with <spell> tags, for example <spell>a@a.com</spell>.",
-            # Rime spell()
-            # "content": "You need to gather a valid email or emails from the user. Your output will be spoken aloud, so avoid special characters that can't easily be spoken, such as emojis or bullet points. If the user provides one or more email addresses confirm them with the user. Enclose all emails with spell(), for example spell(a@a.com).",
-        },
-    ]
-
-    context = LLMContext(messages, tools)
+    context = LLMContext(tools=tools)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),

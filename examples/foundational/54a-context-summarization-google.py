@@ -81,10 +81,17 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
 
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),
-        voice_id="71a7ad14-091c-4e8e-a314-022ece01c121",  # British Reading Lady
+        settings=CartesiaTTSService.Settings(
+            voice="71a7ad14-091c-4e8e-a314-022ece01c121",  # British Reading Lady
+        ),
     )
 
-    llm = GoogleLLMService(api_key=os.getenv("GOOGLE_API_KEY"))
+    llm = GoogleLLMService(
+        api_key=os.getenv("GOOGLE_API_KEY"),
+        settings=GoogleLLMService.Settings(
+            system_instruction="You are a helpful LLM in a WebRTC call. Your goal is to demonstrate your capabilities in a succinct way. Your output will be spoken aloud, so avoid special characters that can't easily be spoken, such as emojis or bullet points. Respond to what the user said in a creative and helpful way. You have access to tools to get the current weather - use them when relevant.",
+        ),
+    )
 
     # Register tool functions
     llm.register_function("get_current_weather", get_current_weather)
@@ -107,14 +114,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     )
     tools = ToolsSchema(standard_tools=[weather_function])
 
-    messages = [
-        {
-            "role": "system",
-            "content": "You are a helpful LLM in a WebRTC call. Your goal is to demonstrate your capabilities in a succinct way. Your output will be spoken aloud, so avoid special characters that can't easily be spoken, such as emojis or bullet points. Respond to what the user said in a creative and helpful way. You have access to tools to get the current weather - use them when relevant.",
-        },
-    ]
-
-    context = LLMContext(messages, tools=tools)
+    context = LLMContext(tools=tools)
 
     # Create aggregators with summarization enabled
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
@@ -138,17 +138,14 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     )
 
     # Listen for summarization events
-    summarizer = assistant_aggregator._summarizer
-    if summarizer:
-
-        @summarizer.event_handler("on_summary_applied")
-        async def on_summary_applied(summarizer, event: SummaryAppliedEvent):
-            logger.info(
-                f"Context summarized: {event.original_message_count} messages -> "
-                f"{event.new_message_count} messages "
-                f"({event.summarized_message_count} summarized, "
-                f"{event.preserved_message_count} preserved)"
-            )
+    @assistant_aggregator.event_handler("on_summary_applied")
+    async def on_summary_applied(aggregator, summarizer, event: SummaryAppliedEvent):
+        logger.info(
+            f"Context summarized: {event.original_message_count} messages -> "
+            f"{event.new_message_count} messages "
+            f"({event.summarized_message_count} summarized, "
+            f"{event.preserved_message_count} preserved)"
+        )
 
     pipeline = Pipeline(
         [
@@ -175,7 +172,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     async def on_client_connected(transport, client):
         logger.info("Client connected")
         # Kick off the conversation.
-        messages.append({"role": "system", "content": "Please introduce yourself to the user."})
+        context.add_message({"role": "user", "content": "Please introduce yourself to the user."})
         await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")

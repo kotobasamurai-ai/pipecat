@@ -90,17 +90,22 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
 
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),
-        voice_id="71a7ad14-091c-4e8e-a314-022ece01c121",  # British Reading Lady
+        settings=CartesiaTTSService.Settings(
+            voice="71a7ad14-091c-4e8e-a314-022ece01c121",  # British Reading Lady
+        ),
     )
 
     # AWS for vision analysis
     llm = AWSBedrockLLMService(
         aws_region="us-west-2",
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        # Note: usually, prefer providing latency="optimized" param.
-        # Here we can't because AWS Bedrock doesn't support it for Claude 3.7,
-        # which we need for image input.
-        params=AWSBedrockLLMService.InputParams(temperature=0.8),
+        settings=AWSBedrockLLMService.Settings(
+            model="us.anthropic.claude-sonnet-4-6",
+            # Note: usually, prefer providing latency="optimized" param.
+            # Here we can't because AWS Bedrock doesn't support it for Claude 3.7,
+            # which we need for image input.
+            temperature=0.8,
+            system_instruction="You are a helpful LLM in a WebRTC call. Your goal is to demonstrate your capabilities in a succinct way. Your output will be spoken aloud, so avoid special characters that can't easily be spoken, such as emojis or bullet points. Respond to what the user said in a creative and helpful way. You are able to describe images from the user camera.",
+        ),
     )
     llm.register_function("fetch_user_image", fetch_user_image)
 
@@ -125,14 +130,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     )
     tools = ToolsSchema(standard_tools=[fetch_image_function])
 
-    messages = [
-        {
-            "role": "system",
-            "content": "You are a helpful LLM in a WebRTC call. Your goal is to demonstrate your capabilities in a succinct way. Your output will be spoken aloud, so avoid special characters that can't easily be spoken, such as emojis or bullet points. Respond to what the user said in a creative and helpful way. You are able to describe images from the user camera.",
-        },
-    ]
-
-    context = LLMContext(messages, tools)
+    context = LLMContext(tools=tools)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
@@ -169,10 +167,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         client_id = get_transport_client_id(transport, client)
 
         # Kick off the conversation.
-        messages.append(
+        context.add_message(
             {
-                "role": "system",
-                "content": f"Please introduce yourself to the user. Use '{client_id}' as the user ID during function calls.",
+                "role": "user",
+                "content": f"Please introduce yourself to the user briefly; don't mention the camera. Use '{client_id}' as the user ID during function calls.",
             }
         )
         await task.queue_frames([LLMRunFrame()])
