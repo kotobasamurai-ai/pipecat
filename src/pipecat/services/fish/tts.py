@@ -362,6 +362,11 @@ class FishAudioTTSService(InterruptibleTTSService):
             return self._websocket
         raise Exception("Websocket not connected")
 
+    async def on_audio_context_interrupted(self, context_id: str):
+        """Cancel server-side synthesis by disconnecting and reconnecting."""
+        await self._disconnect()
+        await self._connect()
+
     async def _handle_interruption(self, frame: InterruptionFrame, direction: FrameDirection):
         await super()._handle_interruption(frame, direction)
         await self.stop_all_metrics()
