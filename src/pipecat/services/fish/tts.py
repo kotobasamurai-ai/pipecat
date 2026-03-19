@@ -116,6 +116,7 @@ class FishAudioTTSService(InterruptibleTTSService):
         model_id: Optional[str] = None,
         output_format: FishAudioOutputFormat = "pcm",
         sample_rate: Optional[int] = None,
+        push_stop_frames: bool = True,
         params: Optional[InputParams] = None,
         settings: Optional[FishAudioTTSSettings] = None,
         **kwargs,
@@ -142,6 +143,9 @@ class FishAudioTTSService(InterruptibleTTSService):
 
             output_format: Audio output format. Defaults to "pcm".
             sample_rate: Audio sample rate. If None, uses default.
+            push_stop_frames: Whether the base TTS service should emit
+                ``TTSStoppedFrame`` after ``stop_frame_timeout_s`` of idle time.
+                Disable this to use Fish's ``finish`` event instead.
             params: Additional input parameters for voice customization.
 
                 .. deprecated:: 0.0.105
@@ -209,7 +213,7 @@ class FishAudioTTSService(InterruptibleTTSService):
             default_settings.apply_update(settings)
 
         super().__init__(
-            push_stop_frames=True,
+            push_stop_frames=push_stop_frames,
             push_start_frame=True,
             pause_frame_processing=True,
             sample_rate=sample_rate,
@@ -388,6 +392,8 @@ class FishAudioTTSService(InterruptibleTTSService):
                                 )
                             else:
                                 logger.debug(f"Fish Audio session finished: {reason}")
+                            if not self._push_stop_frames:
+                                await self.push_frame(TTSStoppedFrame())
 
             except Exception as e:
                 await self.push_error(error_msg=f"Unknown error occurred: {e}", exception=e)
