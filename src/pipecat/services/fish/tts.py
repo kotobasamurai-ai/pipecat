@@ -31,6 +31,7 @@ from pipecat.services.settings import NOT_GIVEN, TTSSettings, _NotGiven, _warn_d
 from pipecat.services.tts_service import InterruptibleTTSService
 from pipecat.transcriptions.language import Language
 from pipecat.utils.tracing.service_decorators import traced_tts
+from pipecat.utils.text.base_text_aggregator import AggregationType
 
 try:
     import ormsgpack
@@ -87,6 +88,10 @@ class FishAudioTTSService(InterruptibleTTSService):
     Settings = FishAudioTTSSettings
     _settings: FishAudioTTSSettings
 
+    def PAUSE_TAG() -> str:
+        """Convenience method to create a Fish pause tag."""
+        return "[pause]"
+
     class InputParams(BaseModel):
         """Input parameters for Fish Audio TTS configuration.
 
@@ -116,6 +121,7 @@ class FishAudioTTSService(InterruptibleTTSService):
         model_id: Optional[str] = None,
         output_format: FishAudioOutputFormat = "pcm",
         sample_rate: Optional[int] = None,
+        pause_tag: Optional[str] = None,
         params: Optional[InputParams] = None,
         settings: Optional[FishAudioTTSSettings] = None,
         **kwargs,
@@ -142,6 +148,9 @@ class FishAudioTTSService(InterruptibleTTSService):
 
             output_format: Audio output format. Defaults to "pcm".
             sample_rate: Audio sample rate. If None, uses default.
+            pause_tag: Optional Fish-native pause tag appended to sentence
+                aggregations before sending text to TTS. This only affects the
+                text sent to Fish and does not change RTVI transcript text.
             params: Additional input parameters for voice customization.
 
                 .. deprecated:: 0.0.105
@@ -221,10 +230,16 @@ class FishAudioTTSService(InterruptibleTTSService):
         self._base_url = "wss://api.fish.audio/v1/tts/live"
         self._websocket = None
         self._receive_task = None
+        self._pause_tag = pause_tag
 
         # Init-only audio format config (not runtime-updatable).
         self._fish_sample_rate = 0  # Set in start()
         self._output_format = output_format
+
+        if self._pause_tag:
+            self.add_text_transformer(
+                self._append_pause_tag_to_sentence, AggregationType.SENTENCE
+            )
 
     def can_generate_metrics(self) -> bool:
         """Check if this service can generate processing metrics.
@@ -233,6 +248,16 @@ class FishAudioTTSService(InterruptibleTTSService):
             True, as Fish Audio service supports metrics generation.
         """
         return True
+
+    async def _append_pause_tag_to_sentence(
+        self, text: str, aggregation_type: AggregationType | str
+    ) -> str:
+        stripped = text.rstrip()
+        if not stripped or not self._pause_tag:
+            return text
+        if stripped.endswith(self._pause_tag):
+            return stripped
+        return f"{stripped}{self._pause_tag}"
 
     async def _update_settings(self, delta: TTSSettings) -> dict[str, Any]:
         """Apply a settings delta and reconnect if needed.
