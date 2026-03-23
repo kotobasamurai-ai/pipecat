@@ -114,6 +114,7 @@ class FishAudioTTSService(InterruptibleTTSService):
         model_id: Optional[str] = None,
         output_format: FishAudioOutputFormat = "pcm",
         sample_rate: Optional[int] = None,
+        inter_utterance_silence_s: float = 0.0,
         params: Optional[InputParams] = None,
         settings: Optional[Settings] = None,
         **kwargs,
@@ -140,6 +141,10 @@ class FishAudioTTSService(InterruptibleTTSService):
 
             output_format: Audio output format. Defaults to "pcm".
             sample_rate: Audio sample rate. If None, uses default.
+            inter_utterance_silence_s: Seconds of silence to insert between
+                sentences within a single turn. Fish Audio returns one audio
+                chunk per flush, so gaps between chunks indicate sentence
+                boundaries. Defaults to 0 (no silence).
             params: Additional input parameters for voice customization.
 
                 .. deprecated:: 0.0.105
@@ -219,6 +224,8 @@ class FishAudioTTSService(InterruptibleTTSService):
         self._base_url = "wss://api.fish.audio/v1/tts/live"
         self._websocket = None
         self._receive_task = None
+        self._inter_utterance_silence_s = inter_utterance_silence_s
+        logger.debug(f"{self}: inter_utterance_silence_s={self._inter_utterance_silence_s}")
 
         # Init-only audio format config (not runtime-updatable).
         self._fish_sample_rate = 0  # Set in start()
@@ -365,6 +372,14 @@ class FishAudioTTSService(InterruptibleTTSService):
         await self.stop_all_metrics()
 
     async def _receive_messages(self):
+        import time
+
+        # Gap detection: Fish Audio returns one audio chunk per flush.
+        # A gap > threshold between chunks indicates a sentence boundary.
+        _GAP_MIN_MS = 200  # below this, not a sentence boundary
+        _GAP_MAX_MS = 5000  # above this, likely a turn boundary (skip silence)
+        _last_audio_time = 0.0
+
         async for message in self._get_websocket():
             try:
                 if isinstance(message, bytes):
@@ -376,6 +391,30 @@ class FishAudioTTSService(InterruptibleTTSService):
                             # Only process larger chunks to remove msgpack overhead
                             if audio_data and len(audio_data) > 1024:
                                 context_id = self.get_active_audio_context_id()
+
+                                # Detect sentence boundary and insert silence
+                                if (
+                                    self._inter_utterance_silence_s > 0
+                                    and _last_audio_time > 0
+                                    and context_id
+                                    and self.audio_context_available(context_id)
+                                ):
+                                    gap_ms = (time.monotonic() - _last_audio_time) * 1000
+                                    if _GAP_MIN_MS < gap_ms < _GAP_MAX_MS:
+                                        logger.debug(
+                                            f"{self}: inserting {self._inter_utterance_silence_s}s "
+                                            f"silence (gap={gap_ms:.0f}ms)"
+                                        )
+                                        num_bytes = int(
+                                            self._inter_utterance_silence_s * self.sample_rate * 2
+                                        )
+                                        silence = TTSAudioRawFrame(
+                                            audio=b"\x00" * num_bytes,
+                                            sample_rate=self.sample_rate,
+                                            num_channels=1,
+                                        )
+                                        await self.append_to_audio_context(context_id, silence)
+
                                 frame = TTSAudioRawFrame(
                                     audio_data,
                                     self.sample_rate,
@@ -384,6 +423,7 @@ class FishAudioTTSService(InterruptibleTTSService):
                                 )
                                 await self.append_to_audio_context(context_id, frame)
                                 await self.stop_ttfb_metrics()
+                                _last_audio_time = time.monotonic()
                         elif event == "finish":
                             reason = msg.get("reason", "unknown")
                             if reason == "error":
