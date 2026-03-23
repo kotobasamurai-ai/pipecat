@@ -365,6 +365,11 @@ class FishAudioTTSService(InterruptibleTTSService):
         await self.stop_all_metrics()
 
     async def _receive_messages(self):
+        import time
+
+        _last_audio_time = 0.0
+        _chunk_count = 0
+
         async for message in self._get_websocket():
             try:
                 if isinstance(message, bytes):
@@ -373,6 +378,15 @@ class FishAudioTTSService(InterruptibleTTSService):
                         event = msg.get("event")
                         if event == "audio":
                             audio_data = msg.get("audio")
+                            now = time.monotonic()
+                            gap = (now - _last_audio_time) * 1000 if _last_audio_time > 0 else 0
+                            size = len(audio_data) if audio_data else 0
+                            _chunk_count += 1
+                            logger.debug(
+                                f"{self}: audio chunk #{_chunk_count} "
+                                f"size={size} gap={gap:.1f}ms"
+                            )
+                            _last_audio_time = now
                             # Only process larger chunks to remove msgpack overhead
                             if audio_data and len(audio_data) > 1024:
                                 context_id = self.get_active_audio_context_id()
@@ -386,12 +400,18 @@ class FishAudioTTSService(InterruptibleTTSService):
                                 await self.stop_ttfb_metrics()
                         elif event == "finish":
                             reason = msg.get("reason", "unknown")
+                            logger.debug(
+                                f"{self}: finish event reason={reason} "
+                                f"after {_chunk_count} chunks"
+                            )
                             if reason == "error":
                                 await self.push_error(
                                     error_msg="Fish Audio server error during synthesis"
                                 )
                             else:
                                 logger.debug(f"Fish Audio session finished: {reason}")
+                        else:
+                            logger.debug(f"{self}: WS event={event}")
 
             except Exception as e:
                 await self.push_error(error_msg=f"Unknown error occurred: {e}", exception=e)
