@@ -943,10 +943,13 @@ class TTSSpeakFrame(DataFrame):
     Parameters:
         text: The text to be spoken.
         append_to_context: Whether to append the text to the context.
+        retry_group_id: Stable identifier for retry/failover tracking across
+            multiple synthesis attempts of the same utterance.
     """
 
     text: str
     append_to_context: Optional[bool] = None
+    retry_group_id: Optional[str] = None
 
 
 @dataclass
@@ -2173,10 +2176,13 @@ class TTSErrorFrame(ErrorFrame):
     Parameters:
         text: The text that failed to synthesize.
         tts_context_id: The context ID of the failed synthesis.
+        retry_group_id: Stable identifier for retry/failover tracking across
+            multiple synthesis attempts of the same utterance.
     """
 
     text: str = ""
     tts_context_id: Optional[str] = None
+    retry_group_id: Optional[str] = None
 
 
 @dataclass
