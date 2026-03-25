@@ -440,7 +440,6 @@ class FishAudioTTSService(InterruptibleTTSService):
                                     error="Fish Audio server error during synthesis",
                                     text=text,
                                     tts_context_id=context_id,
-                                    retry_group_id=self._retry_group_for_context(context_id),
                                 )
                                 await self.push_error_frame(error_frame)
                                 if context_id:
@@ -466,7 +465,6 @@ class FishAudioTTSService(InterruptibleTTSService):
                     exception=e,
                     text=text,
                     tts_context_id=context_id,
-                    retry_group_id=self._retry_group_for_context(context_id),
                 )
                 await self.push_error_frame(error_frame)
                 if context_id:
