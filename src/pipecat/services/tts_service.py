@@ -761,7 +761,9 @@ class TTSService(AIService):
                     f"append_to_context={frame.append_to_context} text={frame.text[:160]!r}"
                 )
                 # If we are not receiving text from the LLM, we can assume that the SpeakFrame should be automatically added to the context
-                push_assistant_aggregation = frame.append_to_context and not self._llm_response_started
+                push_assistant_aggregation = (
+                    frame.append_to_context and not self._llm_response_started
+                )
                 # Assumption: text in TTSSpeakFrame does not include inter-frame spaces
                 await self._push_tts_frames(
                     AggregatedTextFrame(frame.text, AggregationType.SENTENCE),
