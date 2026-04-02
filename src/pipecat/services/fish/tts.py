@@ -437,32 +437,7 @@ class FishAudioTTSService(InterruptibleTTSService):
                                     f"retry_group={retry_group_id or context_id} bytes={len(audio_data)}"
                                 )
 
-                                # DEBUG: Analyze PCM data for zero samples
-                                import struct
-                                n_samples = len(audio_data) // 2
-                                if n_samples > 0:
-                                    pcm = struct.unpack(f"<{n_samples}h", audio_data[:n_samples*2])
-                                    zero_count = sum(1 for s in pcm if s == 0)
-                                    near_zero_count = sum(1 for s in pcm if abs(s) < 5 and s != 0)
-                                    max_abs = max(abs(s) for s in pcm)
-                                    min_abs = min(abs(s) for s in pcm)
-                                    # Find longest zero run
-                                    max_zero_run = 0
-                                    cur_run = 0
-                                    for s in pcm:
-                                        if s == 0:
-                                            cur_run += 1
-                                            max_zero_run = max(max_zero_run, cur_run)
-                                        else:
-                                            cur_run = 0
-                                    max_zero_run_ms = max_zero_run / self.sample_rate * 1000 if self.sample_rate else 0
-                                    logger.info(
-                                        f"{self}: [PCM_ANALYSIS] samples={n_samples} "
-                                        f"zero={zero_count} ({zero_count/n_samples*100:.1f}%) "
-                                        f"near_zero(1-4)={near_zero_count} "
-                                        f"max_abs={max_abs} min_abs={min_abs} "
-                                        f"longest_zero_run={max_zero_run}samples({max_zero_run_ms:.1f}ms)"
-                                    )
+
 
                                 # Detect sentence boundary and insert silence
                                 if (
