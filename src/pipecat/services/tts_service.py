@@ -1434,6 +1434,8 @@ class TTSService(AIService):
         running = True
         timestamps_started = False
         should_push_stop_frame = False
+        _pushed_audio_chunks = 0
+        _pushed_audio_bytes = 0
         logger.debug(
             f"{self} playback begin context={context_id} "
             f"retry_group={self._retry_group_for_context(context_id) or context_id}"
@@ -1472,6 +1474,15 @@ class TTSService(AIService):
                     if isinstance(frame, ErrorFrame):
                         await self.push_error_frame(frame)
                     else:
+                        if isinstance(frame, TTSAudioRawFrame):
+                            _pushed_audio_chunks += 1
+                            _pushed_audio_bytes += len(frame.audio)
+                            logger.debug(
+                                f"{self} playback push audio context={context_id} "
+                                f"retry_group={self._retry_group_for_context(context_id) or context_id} "
+                                f"bytes={len(frame.audio)} "
+                                f"cumulative={_pushed_audio_chunks}chunks/{_pushed_audio_bytes}B"
+                            )
                         await self.push_frame(frame)
             except asyncio.TimeoutError:
                 # We didn't get audio, so let's consider this context finished.
@@ -1482,7 +1493,8 @@ class TTSService(AIService):
                 break
         logger.debug(
             f"{self} playback end context={context_id} "
-            f"retry_group={self._retry_group_for_context(context_id) or context_id}"
+            f"retry_group={self._retry_group_for_context(context_id) or context_id} "
+            f"pushed={_pushed_audio_chunks}chunks/{_pushed_audio_bytes}B"
         )
 
         if should_push_stop_frame and self._push_stop_frames:
