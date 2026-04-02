@@ -755,7 +755,7 @@ class TTSService(AIService):
                 self._turn_context_id = self.create_context_id()
                 await self.on_turn_context_created(self._turn_context_id)
                 self._pending_retry_group_id = frame.retry_group_id
-                logger.info(
+                logger.debug(
                     f"{self} recv TTSSpeakFrame context={self._turn_context_id} "
                     f"retry_group={frame.retry_group_id or self._turn_context_id} "
                     f"append_to_context={frame.append_to_context} text={frame.text[:160]!r}"
@@ -840,7 +840,7 @@ class TTSService(AIService):
             frame.transport_destination = self._transport_destination
 
         if isinstance(frame, (TTSStartedFrame, TTSStoppedFrame, TTSErrorFrame)):
-            logger.info(
+            logger.debug(
                 f"{self} push {type(frame).__name__} direction={direction.name} "
                 f"context={getattr(frame, 'context_id', None) or getattr(frame, 'tts_context_id', None)} "
                 f"retry_group={getattr(frame, 'retry_group_id', None) or self._retry_group_for_context(getattr(frame, 'context_id', None))}"
@@ -1007,7 +1007,7 @@ class TTSService(AIService):
         retry_group_id = self._register_retry_group(
             context_id, self._pending_retry_group_id or self._retry_group_for_context(context_id)
         )
-        logger.info(
+        logger.debug(
             f"{self} schedule TTS context={context_id} retry_group={retry_group_id} "
             f"aggregation={type} append_to_context={append_tts_text_to_context} text={text[:160]!r}"
         )
@@ -1232,7 +1232,7 @@ class TTSService(AIService):
         """
         await self._serialization_queue.put(context_id)
         self._audio_contexts[context_id] = asyncio.Queue()
-        logger.info(
+        logger.debug(
             f"{self} create audio context={context_id} "
             f"retry_group={self._retry_group_for_context(context_id) or context_id}"
         )
@@ -1270,7 +1270,7 @@ class TTSService(AIService):
             return
         if self.audio_context_available(context_id):
             if isinstance(frame, (TTSStartedFrame, TTSStoppedFrame, TTSErrorFrame, ErrorFrame)):
-                logger.info(
+                logger.debug(
                     f"{self} enqueue {type(frame).__name__} context={context_id} "
                     f"retry_group={self._retry_group_for_context(context_id) or context_id}"
                 )
@@ -1384,7 +1384,7 @@ class TTSService(AIService):
         while running:
             context_value = await self._serialization_queue.get()
             if isinstance(context_value, Frame):
-                logger.info(
+                logger.debug(
                     f"{self} serialization push frame={type(context_value).__name__} "
                     f"context={getattr(context_value, 'context_id', None)}"
                 )
@@ -1392,7 +1392,7 @@ class TTSService(AIService):
             elif isinstance(context_value, str):
                 context_id = context_value
                 self._playing_context_id = context_id
-                logger.info(
+                logger.debug(
                     f"{self} serialization start context={context_id} "
                     f"retry_group={self._retry_group_for_context(context_id) or context_id}"
                 )
@@ -1434,7 +1434,7 @@ class TTSService(AIService):
         running = True
         timestamps_started = False
         should_push_stop_frame = False
-        logger.info(
+        logger.debug(
             f"{self} playback begin context={context_id} "
             f"retry_group={self._retry_group_for_context(context_id) or context_id}"
         )
@@ -1480,7 +1480,7 @@ class TTSService(AIService):
                     await self.push_frame(TTSStoppedFrame(context_id=context_id))
                     should_push_stop_frame = False
                 break
-        logger.info(
+        logger.debug(
             f"{self} playback end context={context_id} "
             f"retry_group={self._retry_group_for_context(context_id) or context_id}"
         )
