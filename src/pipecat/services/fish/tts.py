@@ -430,6 +430,26 @@ class FishAudioTTSService(InterruptibleTTSService):
         """
         logger.debug(f"{self}: Generating Fish TTS: [{text}]")
         self._tts_text_by_context[context_id] = text
+
+        # --- Error injection for failover debugging ---
+        import os
+        import random
+
+        error_rate = float(os.getenv("FISH_TTS_ERROR_INJECT_RATE", "0"))
+        if error_rate > 0 and random.random() < error_rate:
+            logger.warning(
+                f"{self}: [DEBUG] Injecting synthetic TTS error "
+                f"(rate={error_rate}) context={context_id}"
+            )
+            yield TTSErrorFrame(
+                error="[DEBUG] Synthetic error injection for failover testing",
+                text=text,
+                tts_context_id=context_id,
+            )
+            yield TTSStoppedFrame(context_id=context_id)
+            return
+        # --- End error injection ---
+
         try:
             if not self._websocket or self._websocket.state is State.CLOSED:
                 await self._connect()
