@@ -7,6 +7,8 @@
 """Soniox speech-to-text service implementation."""
 
 import json
+import os
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, List, Optional
@@ -410,6 +412,18 @@ class SonioxSTTService(WebsocketSTTService):
         Yields:
             Frame: None (transcription results come via WebSocket callbacks).
         """
+        # --- Error injection: audio send failure ---
+        send_error_rate = float(os.getenv("SONIOX_STT_SEND_ERROR_INJECT_RATE", "0"))
+        if send_error_rate > 0 and random.random() < send_error_rate:
+            logger.warning(
+                f"{self}: [DEBUG] Injecting synthetic send error "
+                f"(rate={send_error_rate})"
+            )
+            raise ConnectionError(
+                "[DEBUG] Synthetic audio send failure for failover testing"
+            )
+        # --- End error injection ---
+
         if self._websocket and self._websocket.state is State.OPEN:
             await self._websocket.send(audio)
 
@@ -473,6 +487,20 @@ class SonioxSTTService(WebsocketSTTService):
         try:
             if self._websocket and self._websocket.state is State.OPEN:
                 return
+
+            # --- Error injection: connection failure ---
+            connect_error_rate = float(
+                os.getenv("SONIOX_STT_CONNECT_ERROR_INJECT_RATE", "0")
+            )
+            if connect_error_rate > 0 and random.random() < connect_error_rate:
+                logger.warning(
+                    f"{self}: [DEBUG] Injecting synthetic connection error "
+                    f"(rate={connect_error_rate})"
+                )
+                raise ConnectionError(
+                    "[DEBUG] Synthetic connection failure for failover testing"
+                )
+            # --- End error injection ---
 
             logger.debug("Connecting to Soniox STT")
 
@@ -568,8 +596,32 @@ class SonioxSTTService(WebsocketSTTService):
                 await self.stop_processing_metrics()
                 self._final_transcription_buffer = []
 
+        # --- Error injection: mid-stream disconnect ---
+        _stream_error_rate = float(
+            os.getenv("SONIOX_STT_STREAM_ERROR_INJECT_RATE", "0")
+        )
+        _stream_msg_count = 0
+        _stream_error_after = int(os.getenv("SONIOX_STT_STREAM_ERROR_AFTER_MSGS", "10"))
+        # --- End error injection config ---
+
         async for message in self._get_websocket():
             try:
+                # --- Error injection: mid-stream disconnect ---
+                if _stream_error_rate > 0:
+                    _stream_msg_count += 1
+                    if (
+                        _stream_msg_count >= _stream_error_after
+                        and random.random() < _stream_error_rate
+                    ):
+                        logger.warning(
+                            f"{self}: [DEBUG] Injecting synthetic stream error "
+                            f"after {_stream_msg_count} messages (rate={_stream_error_rate})"
+                        )
+                        raise ConnectionError(
+                            "[DEBUG] Synthetic mid-stream disconnect for failover testing"
+                        )
+                # --- End error injection ---
+
                 content = json.loads(message)
 
                 tokens = content["tokens"]
