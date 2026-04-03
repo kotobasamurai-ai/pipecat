@@ -404,6 +404,24 @@ class FishAudioTTSService(InterruptibleTTSService):
             Frame: Audio frames and control frames for the synthesized speech.
         """
         logger.debug(f"{self}: Generating Fish TTS: [{text}]")
+
+        # --- Error injection for failover debugging ---
+        import os
+        import random
+
+        error_rate = float(os.getenv("FISH_TTS_ERROR_INJECT_RATE", "0"))
+        if error_rate > 0 and random.random() < error_rate:
+            logger.warning(
+                f"{self}: [DEBUG] Injecting synthetic TTS error "
+                f"(rate={error_rate}) context={context_id}"
+            )
+            yield ErrorFrame(
+                error=f"[DEBUG] Synthetic error injection for failover testing (text={text[:80]!r})"
+            )
+            yield TTSStoppedFrame(context_id=context_id)
+            return
+        # --- End error injection ---
+
         try:
             if not self._websocket or self._websocket.state is State.CLOSED:
                 await self._connect()
