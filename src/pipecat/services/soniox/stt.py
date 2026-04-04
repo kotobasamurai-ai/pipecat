@@ -605,23 +605,25 @@ class SonioxSTTService(WebsocketSTTService):
         # --- End error injection config ---
 
         async for message in self._get_websocket():
-            try:
-                # --- Error injection: mid-stream disconnect ---
-                if _stream_error_rate > 0:
-                    _stream_msg_count += 1
-                    if (
-                        _stream_msg_count >= _stream_error_after
-                        and random.random() < _stream_error_rate
-                    ):
-                        logger.warning(
-                            f"{self}: [DEBUG] Injecting synthetic stream error "
-                            f"after {_stream_msg_count} messages (rate={_stream_error_rate})"
-                        )
-                        raise ConnectionError(
-                            "[DEBUG] Synthetic mid-stream disconnect for failover testing"
-                        )
-                # --- End error injection ---
+            # --- Error injection: mid-stream disconnect ---
+            # Must be OUTSIDE try/except to propagate to _receive_task_handler
+            # and trigger reconnect/failover.
+            if _stream_error_rate > 0:
+                _stream_msg_count += 1
+                if (
+                    _stream_msg_count >= _stream_error_after
+                    and random.random() < _stream_error_rate
+                ):
+                    logger.warning(
+                        f"{self}: [DEBUG] Injecting synthetic stream error "
+                        f"after {_stream_msg_count} messages (rate={_stream_error_rate})"
+                    )
+                    raise ConnectionError(
+                        "[DEBUG] Synthetic mid-stream disconnect for failover testing"
+                    )
+            # --- End error injection ---
 
+            try:
                 content = json.loads(message)
 
                 tokens = content["tokens"]
