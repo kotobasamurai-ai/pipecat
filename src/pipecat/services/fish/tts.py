@@ -547,6 +547,27 @@ class FishAudioTTSService(InterruptibleTTSService):
                         elif event == "finish":
                             reason = msg.get("reason", "unknown")
                             context_id = self.get_active_audio_context_id()
+
+                            # Internal retry error injection: override a
+                            # successful finish with reason=error to exercise
+                            # the full reconnect-and-resend path.
+                            import os
+                            import random
+
+                            _inject_rate = float(
+                                os.getenv("FISH_TTS_INTERNAL_ERROR_INJECT_RATE", "0")
+                            )
+                            if (
+                                _inject_rate > 0
+                                and reason != "error"
+                                and random.random() < _inject_rate
+                            ):
+                                logger.warning(
+                                    f"{self}: [DEBUG] Injecting internal retry error "
+                                    f"(rate={_inject_rate}) context={context_id}"
+                                )
+                                reason = "error"
+
                             logger.info(
                                 f"{self}: recv Fish finish event reason={reason} "
                                 f"context={context_id} "
