@@ -547,27 +547,6 @@ class FishAudioTTSService(InterruptibleTTSService):
                         elif event == "finish":
                             reason = msg.get("reason", "unknown")
                             context_id = self.get_active_audio_context_id()
-
-                            # Internal retry error injection: override a
-                            # successful finish with reason=error to exercise
-                            # the full reconnect-and-resend path.
-                            import os
-                            import random
-
-                            _inject_rate = float(
-                                os.getenv("FISH_TTS_INTERNAL_ERROR_INJECT_RATE", "0")
-                            )
-                            if (
-                                _inject_rate > 0
-                                and reason != "error"
-                                and random.random() < _inject_rate
-                            ):
-                                logger.warning(
-                                    f"{self}: [DEBUG] Injecting internal retry error "
-                                    f"(rate={_inject_rate}) context={context_id}"
-                                )
-                                reason = "error"
-
                             logger.info(
                                 f"{self}: recv Fish finish event reason={reason} "
                                 f"context={context_id} "
@@ -656,6 +635,26 @@ class FishAudioTTSService(InterruptibleTTSService):
             )
             yield ErrorFrame(error="[DEBUG] Synthetic error injection for failover testing")
             yield TTSStoppedFrame(context_id=context_id)
+            return
+
+        # Internal retry error injection: skip sending to Fish entirely
+        # and trigger the reconnect-and-resend path. No audio is produced,
+        # matching real Fish server errors.
+        internal_inject_rate = float(os.getenv("FISH_TTS_INTERNAL_ERROR_INJECT_RATE", "0"))
+        if internal_inject_rate > 0 and random.random() < internal_inject_rate:
+            logger.warning(
+                f"{self}: [DEBUG] Injecting internal retry error "
+                f"(rate={internal_inject_rate}) context={context_id} text={text[:80]!r}"
+            )
+            self._pending_texts.setdefault(context_id, []).append(text)
+            count = self._retry_counts.get(context_id, 0) + 1
+            self._retry_counts[context_id] = count
+            if count <= self._max_internal_retries:
+                self._schedule_reconnect_after_error(context_id)
+            else:
+                await self._exhaust_and_propagate_error(context_id)
+                self._schedule_reconnect_after_error()
+            yield None
             return
 
         # Wait if a reconnect is in progress (from a previous sentence's error)
