@@ -673,9 +673,14 @@ class FishAudioTTSService(InterruptibleTTSService):
 
         # Internal retry error injection: skip sending to Fish entirely
         # and trigger the reconnect-and-resend path. No audio is produced,
-        # matching real Fish server errors.
+        # matching real Fish server errors. Skip if retry is already in
+        # progress for this context to avoid cascading reconnects.
         internal_inject_rate = float(os.getenv("FISH_TTS_INTERNAL_ERROR_INJECT_RATE", "0"))
-        if internal_inject_rate > 0 and random.random() < internal_inject_rate:
+        if (
+            internal_inject_rate > 0
+            and random.random() < internal_inject_rate
+            and context_id not in self._retry_pending_texts
+        ):
             logger.warning(
                 f"{self}: [DEBUG] Injecting internal retry error "
                 f"(rate={internal_inject_rate}) context={context_id} text={text[:80]!r}"
