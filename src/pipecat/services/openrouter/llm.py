@@ -11,19 +11,90 @@ extending the base OpenAI LLM service functionality.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from loguru import logger
+from pydantic import BaseModel
 
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
 from pipecat.services.openai.llm import OpenAILLMService
 
 
+class OpenRouterProviderLatencyThreshold(BaseModel):
+    """Latency thresholds by percentile for provider filtering.
+
+    Endpoints that don't meet these thresholds are deprioritized (moved to the
+    end of the list) rather than excluded entirely.
+
+    Args:
+        p50: 50th percentile latency threshold in seconds.
+        p75: 75th percentile latency threshold in seconds.
+        p90: 90th percentile latency threshold in seconds.
+        p99: 99th percentile latency threshold in seconds.
+    """
+
+    p50: Optional[float] = None
+    p75: Optional[float] = None
+    p90: Optional[float] = None
+    p99: Optional[float] = None
+
+
+class OpenRouterSortConfig(BaseModel):
+    """Advanced sort configuration for cross-model routing.
+
+    Args:
+        by: Sort criterion. Use ``"latency"`` to sort by lowest latency,
+            or ``"price"`` to sort by lowest price.
+        partition: Set to ``"none"`` to route to the lowest-latency endpoint
+            across all models (useful with model fallbacks).
+    """
+
+    by: str = "latency"
+    partition: Optional[str] = None
+
+
+class OpenRouterProviderPreferences(BaseModel):
+    """OpenRouter provider routing preferences.
+
+    Controls how OpenRouter selects and prioritizes providers for your request.
+    See https://openrouter.ai/docs/guides/routing/provider-selection for details.
+
+    Args:
+        sort: Provider sort order. Use ``"latency"`` to disable load balancing
+            and try providers in order of lowest latency first. Use ``"price"``
+            to sort by price. Can also be an ``OpenRouterSortConfig`` for
+            advanced cross-model sorting with ``partition``.
+        preferred_max_latency: Maximum acceptable latency threshold. A float
+            applies to the p50 percentile. Use ``OpenRouterProviderLatencyThreshold``
+            for per-percentile control.
+        allow: List of provider names to allow (e.g., ``["OpenAI", "Anthropic"]``).
+        deny: List of provider names to deny.
+        order: Ordered list of provider names to try in sequence.
+        require_parameters: If True, only use providers that support all
+            parameters in the request.
+        quantizations: List of allowed quantization levels
+            (e.g., ``["bf16", "fp8"]``).
+    """
+
+    sort: Optional[Union[str, OpenRouterSortConfig]] = None
+    preferred_max_latency: Optional[Union[float, OpenRouterProviderLatencyThreshold]] = None
+    allow: Optional[List[str]] = None
+    deny: Optional[List[str]] = None
+    order: Optional[List[str]] = None
+    require_parameters: Optional[bool] = None
+    quantizations: Optional[List[str]] = None
+
+
 @dataclass
 class OpenRouterLLMSettings(BaseOpenAILLMService.Settings):
-    """Settings for OpenRouterLLMService."""
+    """Settings for OpenRouterLLMService.
 
-    pass
+    Args:
+        provider: OpenRouter provider routing preferences for controlling
+            provider selection, latency-based sorting, and filtering.
+    """
+
+    provider: Optional[OpenRouterProviderPreferences] = None
 
 
 class OpenRouterLLMService(OpenAILLMService):
@@ -98,6 +169,9 @@ class OpenRouterLLMService(OpenAILLMService):
     def build_chat_completion_params(self, params_from_context: Dict[str, Any]) -> Dict[str, Any]:
         """Builds chat parameters, handling model-specific constraints.
 
+        Includes OpenRouter-specific provider preferences for routing control
+        (latency-based sorting, provider filtering, etc.).
+
         Args:
             params_from_context: Parameters from the LLM context.
 
@@ -105,6 +179,10 @@ class OpenRouterLLMService(OpenAILLMService):
             Transformed parameters ready for the API call.
         """
         params = super().build_chat_completion_params(params_from_context)
+
+        if self._settings.provider is not None:
+            params["provider"] = self._settings.provider.model_dump(exclude_none=True)
+
         if "gemini" in self._settings.model.lower():
             messages = params.get("messages", [])
             if not messages:
