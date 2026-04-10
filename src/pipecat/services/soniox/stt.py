@@ -112,6 +112,7 @@ class SonioxInputParams(BaseModel):
     enable_language_identification: Optional[bool] = False
 
     client_reference_id: Optional[str] = None
+    max_endpoint_delay_ms: Optional[int] = None
 
 
 def is_end_token(token: dict) -> bool:
@@ -535,6 +536,8 @@ class SonioxSTTService(WebsocketSTTService):
                 "enable_language_identification": s.enable_language_identification,
                 "client_reference_id": s.client_reference_id,
             }
+            if s.max_endpoint_delay_ms is not None:
+                config["max_endpoint_delay_ms"] = s.max_endpoint_delay_ms
 
             # Send the configuration message.
             await self._websocket.send(json.dumps(config))

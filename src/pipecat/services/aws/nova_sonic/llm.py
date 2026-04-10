@@ -49,7 +49,6 @@ from pipecat.frames.frames import (
     UserStoppedSpeakingFrame,
 )
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 from pipecat.services.settings import NOT_GIVEN, LLMSettings, _NotGiven
@@ -258,7 +257,6 @@ class AWSNovaSonicLLMService(LLMService):
         settings: Optional[Settings] = None,
         system_instruction: Optional[str] = None,
         tools: Optional[ToolsSchema] = None,
-        send_transcription_frames: bool = True,
         **kwargs,
     ):
         """Initializes the AWS Nova Sonic LLM service.
@@ -302,12 +300,6 @@ class AWSNovaSonicLLMService(LLMService):
                 .. deprecated:: 0.0.105
                     Use ``settings=AWSNovaSonicLLMService.Settings(system_instruction=...)`` instead.
             tools: Available tools/functions for the model to use.
-            send_transcription_frames: Whether to emit transcription frames.
-
-                .. deprecated:: 0.0.91
-                    This parameter is deprecated and will be removed in a future version.
-                    Transcription frames are always sent.
-
             **kwargs: Additional arguments passed to the parent LLMService.
         """
         # 1. Initialize default_settings with hardcoded defaults
@@ -390,18 +382,6 @@ class AWSNovaSonicLLMService(LLMService):
                 "This parameter is only supported starting with Nova 2 Sonic (amazon.nova-2-sonic-v1:0)."
             )
             self._settings.endpointing_sensitivity = None
-
-        if not send_transcription_frames:
-            import warnings
-
-            with warnings.catch_warnings():
-                warnings.simplefilter("always")
-                warnings.warn(
-                    "`send_transcription_frames` is deprecated and will be removed in a future version. "
-                    "Transcription frames are always sent.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
 
         self._context: Optional[LLMContext] = None
         self._stream: Optional[
@@ -1300,18 +1280,8 @@ class AWSNovaSonicLLMService(LLMService):
         # HACK: Check if this transcription was triggered by our own
         # assistant response trigger. If so, we need to wrap it with
         # UserStarted/StoppedSpeakingFrames; otherwise the user aggregator
-        # would fire an EmulatedUserStartedSpeakingFrame, which would
-        # trigger an interruption, which would prevent us from writing the
-        # assistant response to context.
-        #
-        # Sending an EmulateUserStartedSpeakingFrame ourselves doesn't
-        # work: it just causes the interruption we're trying to avoid.
-        #
-        # Setting enable_emulated_vad_interruptions also doesn't work: at
-        # the time the user aggregator receives the TranscriptionFrame, it
-        # doesn't yet know the assistant has started responding, so it
-        # doesn't know that emulating the user starting to speak would
-        # cause an interruption.
+        # would trigger an interruption, which would prevent us from
+        # writing the assistant response to context.
         should_wrap_in_user_started_stopped_speaking_frames = (
             self._waiting_for_trigger_transcription
             and self._user_text_buffer.strip().lower() == "ready"

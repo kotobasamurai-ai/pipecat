@@ -29,7 +29,6 @@ from typing import (
 
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.dtmf.types import KeypadEntry
-from pipecat.audio.interruptions.base_interruption_strategy import BaseInterruptionStrategy
 from pipecat.audio.turn.base_turn_analyzer import BaseTurnParams
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.metrics.metrics import MetricsData
@@ -39,7 +38,7 @@ from pipecat.utils.time import nanoseconds_to_str
 from pipecat.utils.utils import obj_count, obj_id
 
 if TYPE_CHECKING:
-    from pipecat.processors.aggregators.llm_context import LLMContext, NotGiven
+    from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextMessage, NotGiven
     from pipecat.processors.frame_processor import FrameProcessor
     from pipecat.services.settings import ServiceSettings
     from pipecat.utils.context.llm_context_summarization import LLMContextSummaryConfig
@@ -463,137 +462,6 @@ class LLMContextAssistantTimestampFrame(DataFrame):
 
 
 @dataclass
-class TranscriptionMessage:
-    """A message in a conversation transcript.
-
-    A message in a conversation transcript containing the role and content.
-    Messages are in standard format with roles normalized to user/assistant.
-
-    Parameters:
-        role: The role of the message sender (user or assistant).
-        content: The message content/text.
-        user_id: Optional identifier for the user.
-        timestamp: Optional timestamp when the message was created.
-
-    .. deprecated:: 0.0.99
-        `TranscriptionMessage` is deprecated and will be removed in a future version.
-        Use `LLMUserAggregator`'s and `LLMAssistantAggregator`'s new events instead.
-    """
-
-    role: Literal["user", "assistant"]
-    content: str
-    user_id: Optional[str] = None
-    timestamp: Optional[str] = None
-
-    def __post_init__(self):
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("always")
-            warnings.warn(
-                "TranscriptionMessage is deprecated and will be removed in a future version. "
-                "Use `LLMUserAggregator`'s and `LLMAssistantAggregator`'s new events instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-
-@dataclass
-class ThoughtTranscriptionMessage:
-    """An LLM thought message in a conversation transcript.
-
-    .. deprecated:: 0.0.99
-        `ThoughtTranscriptionMessage` is deprecated and will be removed in a future version.
-        Use `LLMAssistantAggregator`'s new events instead.
-    """
-
-    role: Literal["assistant"] = field(default="assistant", init=False)
-    content: str
-    timestamp: Optional[str] = None
-
-    def __post_init__(self):
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("always")
-            warnings.warn(
-                "ThoughtTranscriptionMessage is deprecated and will be removed in a future version. "
-                "Use `LLMAssistantAggregator`'s new events instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-
-@dataclass
-class TranscriptionUpdateFrame(DataFrame):
-    """Frame containing new messages added to conversation transcript.
-
-    A frame containing new messages added to the conversation transcript.
-    This frame is emitted when new messages are added to the conversation history,
-    containing only the newly added messages rather than the full transcript.
-    Messages have normalized roles (user/assistant) regardless of the LLM service used.
-    Messages are always in the OpenAI standard message format, which supports both:
-
-    Examples:
-        Simple format::
-
-            [
-                {
-                    "role": "user",
-                    "content": "Hi, how are you?"
-                },
-                {
-                    "role": "assistant",
-                    "content": "Great! And you?"
-                }
-            ]
-
-        Content list format::
-
-            [
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": "Hi, how are you?"}]
-                },
-                {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "Great! And you?"}]
-                }
-            ]
-
-    OpenAI supports both formats. Anthropic and Google messages are converted to the
-    content list format.
-
-    Parameters:
-        messages: List of new transcript messages that were added.
-
-    .. deprecated:: 0.0.99
-        `TranscriptionUpdateFrame` is deprecated and will be removed in a future version.
-        Use `LLMUserAggregator`'s and `LLMAssistantAggregator`'s new events instead.
-    """
-
-    messages: List[TranscriptionMessage | ThoughtTranscriptionMessage]
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("always")
-            warnings.warn(
-                "TranscriptionUpdateFrame is deprecated and will be removed in a future version. "
-                "Use `LLMUserAggregator`'s and `LLMAssistantAggregator`'s new events instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-    def __str__(self):
-        pts = format_pts(self.pts)
-        return f"{self.name}(pts: {pts}, messages: {len(self.messages)})"
-
-
-@dataclass
 class LLMContextFrame(Frame):
     """Frame containing a universal LLM context.
 
@@ -716,6 +584,23 @@ class LLMMessagesUpdateFrame(DataFrame):
     """
 
     messages: List[dict]
+    run_llm: Optional[bool] = None
+
+
+@dataclass
+class LLMMessagesTransformFrame(DataFrame):
+    """Frame containing a transform function to modify the current context's LLM messages.
+
+    A frame containing a transform function that takes the context's current list
+    of LLM messages and returns a modified list.
+
+    Parameters:
+        transform: A function that takes a list of messages and returns a
+            modified list.
+        run_llm: Whether the context update should be sent to the LLM.
+    """
+
+    transform: Callable[[List["LLMContextMessage"]], List["LLMContextMessage"]]
     run_llm: Optional[bool] = None
 
 
@@ -881,30 +766,18 @@ class StartFrame(SystemFrame):
     Parameters:
         audio_in_sample_rate: Input audio sample rate in Hz.
         audio_out_sample_rate: Output audio sample rate in Hz.
-        allow_interruptions: Whether to allow user interruptions.
-
-            .. deprecated:: 0.0.99
-                Use  `LLMUserAggregator`'s new `user_mute_strategies` parameter instead.
-
         enable_metrics: Whether to enable performance metrics collection.
         enable_tracing: Whether to enable OpenTelemetry tracing.
         enable_usage_metrics: Whether to enable usage metrics collection.
-        interruption_strategies: List of interruption handling strategies.
-
-            .. deprecated:: 0.0.99
-                Use  `LLMUserAggregator`'s new `user_turn_strategies` parameter instead.
-
         report_only_initial_ttfb: Whether to report only initial time-to-first-byte.
         tracing_context: Pipeline-scoped tracing context for span hierarchy.
     """
 
     audio_in_sample_rate: int = 16000
     audio_out_sample_rate: int = 24000
-    allow_interruptions: bool = False
     enable_metrics: bool = False
     enable_tracing: bool = False
     enable_usage_metrics: bool = False
-    interruption_strategies: List[BaseInterruptionStrategy] = field(default_factory=list)
     report_only_initial_ttfb: bool = False
     tracing_context: Optional["TracingContext"] = None
 
@@ -1013,16 +886,9 @@ class UserStartedSpeakingFrame(SystemFrame):
 
     Emitted when the user turn starts, which usually means that some
     transcriptions are already available.
-
-    Parameters:
-        emulated: Whether this event was emulated rather than detected by VAD.
-
-            .. deprecated:: 0.0.99
-                This field is deprecated and will be removed in a future version.
-
     """
 
-    emulated: bool = False
+    pass
 
 
 @dataclass
@@ -1031,16 +897,9 @@ class UserStoppedSpeakingFrame(SystemFrame):
 
     Emitted when the user turn ends. This usually coincides with the start of
     the bot turn.
-
-    Parameters:
-        emulated: Whether this event was emulated rather than detected by VAD.
-
-            .. deprecated:: 0.0.99
-                This field is deprecated and will be removed in a future version.
-
     """
 
-    emulated: bool = False
+    pass
 
 
 @dataclass
@@ -1073,56 +932,6 @@ class UserSpeakingFrame(SystemFrame):
     """
 
     pass
-
-
-@dataclass
-class EmulateUserStartedSpeakingFrame(SystemFrame):
-    """Frame to emulate user started speaking behavior.
-
-    Emitted by internal processors upstream to emulate VAD behavior when a
-    user starts speaking.
-
-    .. deprecated:: 0.0.99
-        This frame is deprecated and will be removed in a future version.
-    """
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("always")
-            warnings.warn(
-                "EmulateUserStartedSpeakingFrame is deprecated and will be removed in a future version.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-
-@dataclass
-class EmulateUserStoppedSpeakingFrame(SystemFrame):
-    """Frame to emulate user stopped speaking behavior.
-
-    Emitted by internal processors upstream to emulate VAD behavior when a
-    user stops speaking.
-
-    .. deprecated:: 0.0.99
-        This frame is deprecated and will be removed in a future version.
-    """
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("always")
-            warnings.warn(
-                "EmulateUserStoppedSpeakingFrame is deprecated and will be removed in a future version.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
 
 
 @dataclass
@@ -1303,7 +1112,6 @@ class UserImageRequestFrame(SystemFrame):
         function_name: Name of function that generated this request (if any).
         tool_call_id: Tool call ID if generated by function call (if any).
         result_callback: Optional callback to invoke when the image is retrieved.
-        context: [DEPRECATED] Optional context for the image request.
     """
 
     user_id: str
@@ -1313,21 +1121,6 @@ class UserImageRequestFrame(SystemFrame):
     function_name: Optional[str] = None
     tool_call_id: Optional[str] = None
     result_callback: Optional[Any] = None
-    context: Optional[Any] = None
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        if self.context:
-            import warnings
-
-            with warnings.catch_warnings():
-                warnings.simplefilter("always")
-                warnings.warn(
-                    "`UserImageRequestFrame` field `context` is deprecated.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
 
     def __str__(self):
         return f"{self.name}(user: {self.user_id}, text: {self.text}, append_to_context: {self.append_to_context}, {self.video_source})"
@@ -1853,12 +1646,19 @@ class FunctionCallInProgressFrame(ControlFrame, UninterruptibleFrame):
         tool_call_id: Unique identifier for this function call.
         arguments: Arguments passed to the function.
         cancel_on_interruption: Whether to cancel this call if interrupted.
+            When ``False`` the call is treated as asynchronous: the LLM
+            continues the conversation immediately without waiting for the
+            result, and the result is injected later via a developer message.
+        group_id: Identifier shared by all function calls originating from the
+            same LLM response batch. Used to determine when the last call in a
+            group completes so the LLM can be triggered exactly once.
     """
 
     function_name: str
     tool_call_id: str
     arguments: Any
     cancel_on_interruption: bool = False
+    group_id: Optional[str] = None
 
 
 @dataclass

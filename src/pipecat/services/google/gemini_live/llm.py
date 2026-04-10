@@ -16,7 +16,6 @@ import base64
 import io
 import time
 import uuid
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
@@ -53,13 +52,11 @@ from pipecat.frames.frames import (
     TTSStartedFrame,
     TTSStoppedFrame,
     TTSTextFrame,
-    UserImageRawFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
 )
 from pipecat.metrics.metrics import LLMTokenUsage
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.google.frames import LLMSearchOrigin, LLMSearchResponseFrame, LLMSearchResult
 from pipecat.services.google.utils import update_google_client_http_options
@@ -81,10 +78,8 @@ try:
         AudioTranscriptionConfig,
         AutomaticActivityDetection,
         Blob,
-        Content,
         ContextWindowCompressionConfig,
         EndSensitivity,
-        FileData,
         FunctionResponse,
         GenerationConfig,
         GroundingMetadata,
@@ -94,7 +89,6 @@ try:
         LiveServerMessage,
         MediaResolution,
         Modality,
-        Part,
         ProactivityConfig,
         RealtimeInputConfig,
         SessionResumptionConfig,
@@ -380,7 +374,6 @@ class GeminiLiveLLMService(LLMService):
         self,
         *,
         api_key: str,
-        base_url: Optional[str] = None,
         model: Optional[str] = None,
         voice_id: str = "Charon",
         start_audio_paused: bool = False,
@@ -398,13 +391,6 @@ class GeminiLiveLLMService(LLMService):
 
         Args:
             api_key: Google AI API key for authentication.
-            base_url: API endpoint base URL. Defaults to the official Gemini Live endpoint.
-
-                .. deprecated:: 0.0.90
-                    This parameter is deprecated and no longer has any effect.
-                    Please use `http_options` to customize requests made by the
-                    API client.
-
             model: Model identifier to use.
 
                 .. deprecated:: 0.0.105
@@ -431,18 +417,6 @@ class GeminiLiveLLMService(LLMService):
             http_options: HTTP options for the client.
             **kwargs: Additional arguments passed to parent LLMService.
         """
-        # Check for deprecated parameter usage
-        if base_url is not None:
-            import warnings
-
-            with warnings.catch_warnings():
-                warnings.simplefilter("always")
-                warnings.warn(
-                    "Parameter 'base_url' is deprecated and no longer has any effect. Please use 'http_options' to customize requests made by the API client.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-
         # 1. Initialize default_settings with hardcoded defaults
         default_settings = self.Settings(
             model="models/gemini-2.5-flash-native-audio-preview-12-2025",
@@ -515,13 +489,11 @@ class GeminiLiveLLMService(LLMService):
             )
 
         super().__init__(
-            base_url=base_url,
             settings=default_settings,
             **kwargs,
         )
 
         self._last_sent_time = 0
-        self._base_url = base_url
 
         self._system_instruction_from_init = self._settings.system_instruction
         self._tools_from_init = tools
@@ -1383,11 +1355,28 @@ class GeminiLiveLLMService(LLMService):
     async def _handle_session_ready(self, session: AsyncSession):
         """Handle the session being ready."""
         self._session = session
-        # If we were just waititng for the session to be ready to run the LLM,
-        # do that now.
         if self._run_llm_when_session_ready:
+            # Initial connection: context arrived before session was ready.
             self._run_llm_when_session_ready = False
             await self._create_initial_response()
+        elif self._session_resumption_handle:
+            # Reconnect with session resumption: the server will restore
+            # session state, so we can accept realtime input right away.
+            self._ready_for_realtime_input = True
+        elif self._context:
+            # Reconnect without session resumption (e.g. error occurred
+            # before server sent a resumption handle).
+            # TODO: ideally we'd re-send conversation history here via
+            # _create_initial_response(), but that currently doesn't handle
+            # the reconnect case properly. This should be very rare — the
+            # connection would have to drop before we've received our first
+            # session_resumption_handle from the server.
+            self._ready_for_realtime_input = True
+        else:
+            # Initial connection: session is ready before context has
+            # arrived. Nothing to do — _handle_context will call
+            # _create_initial_response when the context arrives.
+            pass
 
     async def _handle_msg_model_turn(self, msg: LiveServerMessage):
         """Handle the model turn message."""
