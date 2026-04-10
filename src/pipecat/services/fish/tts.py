@@ -478,6 +478,8 @@ class FishAudioTTSService(InterruptibleTTSService):
             await self.remove_audio_context(context_id)
 
     async def _receive_messages(self):
+        import os
+        import random
         import time
 
         # Gap detection: Fish Audio returns one audio chunk per flush.
@@ -554,6 +556,23 @@ class FishAudioTTSService(InterruptibleTTSService):
                         elif event == "finish":
                             reason = msg.get("reason", "unknown")
                             context_id = self.get_active_audio_context_id()
+
+                            # Error injection at receive level: override a
+                            # successful finish with "error" to simulate Fish
+                            # server failures after audio was actually sent.
+                            if reason != "error":
+                                _recv_inject_rate = float(
+                                    os.getenv("FISH_TTS_RECEIVE_ERROR_INJECT_RATE", "0")
+                                )
+                                if _recv_inject_rate > 0 and random.random() < _recv_inject_rate:
+                                    logger.warning(
+                                        f"{self}: [DEBUG] Overriding finish reason "
+                                        f"'{reason}' -> 'error' "
+                                        f"(rate={_recv_inject_rate}) "
+                                        f"context={context_id}"
+                                    )
+                                    reason = "error"
+
                             logger.info(
                                 f"{self}: recv Fish finish event reason={reason} "
                                 f"context={context_id} "
