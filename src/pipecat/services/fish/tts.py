@@ -432,6 +432,9 @@ class FishAudioTTSService(InterruptibleTTSService):
         )
 
     async def _reconnect_and_resend(self, context_id: Optional[str] = None):
+        import os
+        import random
+
         try:
             # Keep audio context alive during reconnect so the serialization
             # queue doesn't move on to the next context.
@@ -453,6 +456,7 @@ class FishAudioTTSService(InterruptibleTTSService):
 
             # Resend all pending texts for this context in order
             pending = self._retry_pending_texts.get(context_id, []) if context_id else []
+            inject_after_resend = False
             for text in pending:
                 logger.info(
                     f"{self}: [INTERNAL_RETRY] resending text context={context_id} "
@@ -461,16 +465,46 @@ class FishAudioTTSService(InterruptibleTTSService):
                 await self._websocket.send(ormsgpack.packb({"event": "text", "text": text}))
                 await self._websocket.send(ormsgpack.packb({"event": "flush"}))
 
+                # A-pattern error injection on resend: each send has an
+                # independent failure probability, so retries do not get a
+                # free pass. This models reality where every text+flush to
+                # Fish can independently be rejected by the server.
+                inject_a_rate = float(os.getenv("FISH_TTS_INJECT_A_RATE", "0"))
+                if inject_a_rate > 0 and random.random() < inject_a_rate:
+                    latency_ms = float(os.getenv("FISH_TTS_INJECT_A_LATENCY_MS", "30"))
+                    logger.warning(
+                        f"{self}: [DEBUG] Injecting A-pattern error on resend "
+                        f"(rate={inject_a_rate}, latency={latency_ms}ms) "
+                        f"context={context_id} text={text[:80]!r}"
+                    )
+                    await asyncio.sleep(latency_ms / 1000.0)
+                    inject_after_resend = True
+                    break  # Stop resending; trigger another retry cycle below
+
             # Keep audio context alive while Fish processes resent texts.
             # Without this, the 3s context timeout can fire before audio arrives.
-            if context_id and pending:
+            if context_id and pending and not inject_after_resend:
                 self._start_keepalive(context_id)
 
-            # Start new receive loop
-            if not self._receive_task:
+            # Start new receive loop (only if we're not about to trigger
+            # another error cycle, in which case _handle_synthesis_error
+            # will schedule the next reconnect and spawn a fresh receive
+            # loop when that reconnect completes).
+            if not self._receive_task and not inject_after_resend:
                 self._receive_task = self.create_task(
                     self._receive_task_handler(self._report_error)
                 )
+
+            if inject_after_resend:
+                # Mark reconnect as done *before* calling handle_synthesis_error
+                # so the next _schedule_reconnect_after_error isn't blocked by
+                # the in-progress guard. The finally block below will re-run
+                # this reset, which is idempotent.
+                self._reconnect_task = None
+                self._reconnect_in_progress = False
+                self._reconnect_event.set()
+                await self._handle_synthesis_error(context_id)
+                return
         except Exception as e:
             logger.error(f"{self}: [INTERNAL_RETRY] reconnect failed: {e}")
             if context_id:
