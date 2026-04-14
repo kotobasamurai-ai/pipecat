@@ -480,6 +480,43 @@ class FishAudioTTSService(InterruptibleTTSService):
             self._reconnect_in_progress = False
             self._reconnect_event.set()
 
+    async def _handle_synthesis_error(
+        self,
+        context_id: Optional[str],
+        chunks: int = 0,
+        bytes_received: int = 0,
+        duration_s: float = 0.0,
+    ) -> None:
+        """Handle Fish synthesis error (reason=error from finish event).
+
+        Extracted from _receive_messages() so the same path can be driven from
+        A-pattern injection (FISH_TTS_INJECT_A_RATE). Invokes the internal
+        retry mechanism (reconnect + resend) or exhausts retries if limit
+        exceeded. Callers from the receive loop pass actual audio counters;
+        injection callers pass zeros (A-pattern = no audio received).
+        """
+        count = self._retry_counts.get(context_id, 0) + 1 if context_id else 1
+        if context_id:
+            self._retry_counts[context_id] = count
+        ctx_queue_size = 0
+        if context_id and self.audio_context_available(context_id):
+            ctx_queue_size = self._audio_contexts[context_id].qsize()
+        logger.warning(
+            f"{self}: [INTERNAL_RETRY] Fish finish reason=error "
+            f"attempt={count}/{self._max_internal_retries} "
+            f"context={context_id} | "
+            f"audio_received: {chunks} chunks, "
+            f"{bytes_received} bytes, "
+            f"{duration_s:.1f}s | "
+            f"audio_context_queue_size={ctx_queue_size}"
+        )
+        if count <= self._max_internal_retries:
+            self._schedule_reconnect_after_error(context_id)
+        else:
+            if context_id:
+                await self._exhaust_and_propagate_error(context_id)
+            self._schedule_reconnect_after_error()
+
     async def _exhaust_and_propagate_error(
         self, context_id: str, exception: Optional[Exception] = None
     ):
@@ -587,32 +624,13 @@ class FishAudioTTSService(InterruptibleTTSService):
                                 f"{self._retry_group_for_context(context_id) or context_id}"
                             )
                             if reason == "error":
-                                count = (
-                                    self._retry_counts.get(context_id, 0) + 1 if context_id else 1
+                                await self._handle_synthesis_error(
+                                    context_id,
+                                    chunks=_audio_chunks_received,
+                                    bytes_received=_audio_bytes_received,
+                                    duration_s=_audio_duration_s,
                                 )
-                                if context_id:
-                                    self._retry_counts[context_id] = count
-                                # Diagnostic info
-                                ctx_queue_size = 0
-                                if context_id and self.audio_context_available(context_id):
-                                    ctx_queue_size = self._audio_contexts[context_id].qsize()
-                                logger.warning(
-                                    f"{self}: [INTERNAL_RETRY] Fish finish reason=error "
-                                    f"attempt={count}/{self._max_internal_retries} "
-                                    f"context={context_id} | "
-                                    f"audio_received: {_audio_chunks_received} chunks, "
-                                    f"{_audio_bytes_received} bytes, "
-                                    f"{_audio_duration_s:.1f}s | "
-                                    f"audio_context_queue_size={ctx_queue_size}"
-                                )
-                                if count <= self._max_internal_retries:
-                                    self._schedule_reconnect_after_error(context_id)
-                                    return
-                                else:
-                                    if context_id:
-                                        await self._exhaust_and_propagate_error(context_id)
-                                    self._schedule_reconnect_after_error()
-                                    return
+                                return
                             else:
                                 # Success — pop the first pending text
                                 if context_id and context_id in self._retry_pending_texts:
@@ -731,6 +749,27 @@ class FishAudioTTSService(InterruptibleTTSService):
                 yield TTSStoppedFrame(context_id=context_id)
                 await self._disconnect()
                 await self._connect()
+
+            # A-pattern error injection: simulate Fish server rejecting
+            # synthesis after text+flush was sent but before any audio is
+            # produced. Real Fish server errors return finish=error within
+            # ~500ms with 0 audio bytes; we approximate by sleeping briefly
+            # (short enough that real audio hasn't arrived yet) then driving
+            # the same [INTERNAL_RETRY] path.
+            inject_a_rate = float(os.getenv("FISH_TTS_INJECT_A_RATE", "0"))
+            if inject_a_rate > 0 and random.random() < inject_a_rate:
+                latency_ms = float(os.getenv("FISH_TTS_INJECT_A_LATENCY_MS", "30"))
+                logger.warning(
+                    f"{self}: [DEBUG] Injecting A-pattern error "
+                    f"(rate={inject_a_rate}, latency={latency_ms}ms) "
+                    f"context={context_id} text={text[:80]!r}"
+                )
+                # text is already in _retry_pending_texts from the normal
+                # send path (see above) — no need to append again.
+                await asyncio.sleep(latency_ms / 1000.0)
+                await self._handle_synthesis_error(context_id)
+                yield None
+                return
 
             yield None
 
