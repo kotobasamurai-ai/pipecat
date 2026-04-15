@@ -1438,6 +1438,9 @@ class TTSService(AIService):
 
                     if isinstance(frame, ErrorFrame):
                         await self.push_error_frame(frame)
+                        # Error means this context is done — break immediately
+                        # instead of waiting for the stop_frame_timeout_s.
+                        running = False
                     else:
                         if isinstance(frame, TTSAudioRawFrame):
                             _pushed_audio_chunks += 1
