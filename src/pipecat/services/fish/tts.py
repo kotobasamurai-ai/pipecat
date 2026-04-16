@@ -239,7 +239,6 @@ class FishAudioTTSService(InterruptibleTTSService):
         self._max_internal_retries: int = 3
         self._reconnect_event = asyncio.Event()
         self._reconnect_event.set()
-        self._keepalive_task: Optional[asyncio.Task] = None
 
         # Init-only audio format config (not runtime-updatable).
         self._fish_sample_rate = 0  # Set in start()
@@ -319,8 +318,6 @@ class FishAudioTTSService(InterruptibleTTSService):
             await self.cancel_task(self._reconnect_task)
             self._reconnect_task = None
 
-        self._stop_keepalive()
-
         await self._disconnect_websocket()
 
     async def _connect_websocket(self):
@@ -394,29 +391,8 @@ class FishAudioTTSService(InterruptibleTTSService):
         """Stop all metrics and clean up retry state when audio context is interrupted."""
         self._retry_pending_texts.pop(context_id, None)
         self._retry_counts.pop(context_id, None)
-        self._stop_keepalive()
         await self.stop_all_metrics()
         await super().on_audio_context_interrupted(context_id)
-
-    def _start_keepalive(self, context_id: str):
-        """Send periodic keepalives to prevent audio context timeout during retry."""
-        self._stop_keepalive()
-
-        async def _keepalive_loop():
-            while (
-                context_id in self._retry_pending_texts
-                and self._retry_pending_texts[context_id]
-                and self.audio_context_available(context_id)
-            ):
-                self._refresh_audio_context(context_id)
-                await asyncio.sleep(1.5)
-
-        self._keepalive_task = self.create_task(_keepalive_loop(), name="fish_keepalive")
-
-    def _stop_keepalive(self):
-        if self._keepalive_task and not self._keepalive_task.done():
-            self._keepalive_task.cancel()
-        self._keepalive_task = None
 
     def _schedule_reconnect_after_error(self, context_id: Optional[str] = None):
         if self._reconnect_task and not self._reconnect_task.done():
@@ -481,11 +457,6 @@ class FishAudioTTSService(InterruptibleTTSService):
                     await asyncio.sleep(latency_ms / 1000.0)
                     inject_after_resend = True
                     break  # Stop resending; trigger another retry cycle below
-
-            # Keep audio context alive while Fish processes resent texts.
-            # Without this, the 3s context timeout can fire before audio arrives.
-            if context_id and pending and not inject_after_resend:
-                self._start_keepalive(context_id)
 
             # Start new receive loop (only if we're not about to trigger
             # another error cycle, in which case _handle_synthesis_error
@@ -561,7 +532,6 @@ class FishAudioTTSService(InterruptibleTTSService):
         ServiceSwitcher failover strategy can reinject the failed text into a
         backup TTS service.
         """
-        self._stop_keepalive()
         pending = self._retry_pending_texts.pop(context_id, [])
         self._retry_counts.pop(context_id, None)
         texts_summary = "; ".join(t[:80] for t in pending) if pending else "(none)"
@@ -686,7 +656,6 @@ class FishAudioTTSService(InterruptibleTTSService):
                                         pending.pop(0)
                                     if not pending:
                                         del self._retry_pending_texts[context_id]
-                                        self._stop_keepalive()
                                 if context_id:
                                     self._retry_counts.pop(context_id, None)
                                 logger.debug(f"Fish Audio session finished: {reason}")
