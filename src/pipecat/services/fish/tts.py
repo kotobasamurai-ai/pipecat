@@ -583,7 +583,7 @@ class FishAudioTTSService(InterruptibleTTSService):
                             if audio_data and len(audio_data) > 1024:
                                 context_id = self.get_active_audio_context_id()
                                 retry_group_id = self._retry_group_for_context(context_id)
-                                logger.debug(
+                                logger.trace(
                                     f"{self}: recv Fish audio event context={context_id} "
                                     f"retry_group={retry_group_id or context_id} "
                                     f"bytes={len(audio_data)}"
@@ -684,8 +684,7 @@ class FishAudioTTSService(InterruptibleTTSService):
         Yields:
             Frame: Audio frames and control frames for the synthesized speech.
         """
-        logger.debug(f"{self}: Generating Fish TTS: [{text}]")
-        logger.info(
+        logger.debug(
             f"{self}: run_tts context={context_id} "
             f"retry_group={self._retry_group_for_context(context_id) or context_id} "
             f"text={text[:160]!r}"
@@ -746,7 +745,7 @@ class FishAudioTTSService(InterruptibleTTSService):
                 "text": text,
             }
             try:
-                logger.info(
+                logger.trace(
                     f"{self}: send Fish text event context={context_id} "
                     f"retry_group={self._retry_group_for_context(context_id) or context_id}"
                 )
@@ -755,7 +754,7 @@ class FishAudioTTSService(InterruptibleTTSService):
 
                 # Send flush event to force audio generation
                 flush_message = {"event": "flush"}
-                logger.info(
+                logger.trace(
                     f"{self}: send Fish flush event context={context_id} "
                     f"retry_group={self._retry_group_for_context(context_id) or context_id}"
                 )

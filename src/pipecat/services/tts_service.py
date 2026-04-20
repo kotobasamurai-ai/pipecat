@@ -1445,7 +1445,7 @@ class TTSService(AIService):
                         if isinstance(frame, TTSAudioRawFrame):
                             _pushed_audio_chunks += 1
                             _pushed_audio_bytes += len(frame.audio)
-                            logger.debug(
+                            logger.trace(
                                 f"{self} playback push audio context={context_id} "
                                 f"retry_group={self._retry_group_for_context(context_id) or context_id} "
                                 f"bytes={len(frame.audio)} "
