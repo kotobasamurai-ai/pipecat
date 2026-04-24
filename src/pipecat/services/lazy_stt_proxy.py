@@ -6,7 +6,8 @@
 
 """Lazy STT proxy that defers service creation until the first audio frame arrives."""
 
-from typing import Callable, Optional
+from collections.abc import Callable
+from typing import Optional
 
 from loguru import logger
 
@@ -48,8 +49,8 @@ class LazySTTProxy(FrameProcessor):
         """
         super().__init__(**kwargs)
         self._factory = factory
-        self._stt: Optional[STTService] = None
-        self._start_frame: Optional[StartFrame] = None
+        self._stt: STTService | None = None
+        self._start_frame: StartFrame | None = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process a frame, lazily initializing the STT service on first audio.

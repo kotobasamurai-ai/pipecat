@@ -11,7 +11,7 @@ extending the base OpenAI LLM service functionality.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel
@@ -33,10 +33,10 @@ class OpenRouterProviderLatencyThreshold(BaseModel):
         p99: 99th percentile latency threshold in seconds.
     """
 
-    p50: Optional[float] = None
-    p75: Optional[float] = None
-    p90: Optional[float] = None
-    p99: Optional[float] = None
+    p50: float | None = None
+    p75: float | None = None
+    p90: float | None = None
+    p99: float | None = None
 
 
 class OpenRouterSortConfig(BaseModel):
@@ -50,7 +50,7 @@ class OpenRouterSortConfig(BaseModel):
     """
 
     by: str = "latency"
-    partition: Optional[str] = None
+    partition: str | None = None
 
 
 class OpenRouterProviderPreferences(BaseModel):
@@ -76,13 +76,13 @@ class OpenRouterProviderPreferences(BaseModel):
             (e.g., ``["bf16", "fp8"]``).
     """
 
-    sort: Optional[Union[str, OpenRouterSortConfig]] = None
-    preferred_max_latency: Optional[Union[float, OpenRouterProviderLatencyThreshold]] = None
-    allow: Optional[List[str]] = None
-    deny: Optional[List[str]] = None
-    order: Optional[List[str]] = None
-    require_parameters: Optional[bool] = None
-    quantizations: Optional[List[str]] = None
+    sort: str | OpenRouterSortConfig | None = None
+    preferred_max_latency: float | OpenRouterProviderLatencyThreshold | None = None
+    allow: list[str] | None = None
+    deny: list[str] | None = None
+    order: list[str] | None = None
+    require_parameters: bool | None = None
+    quantizations: list[str] | None = None
 
 
 @dataclass
@@ -94,7 +94,7 @@ class OpenRouterLLMSettings(BaseOpenAILLMService.Settings):
             provider selection, latency-based sorting, and filtering.
     """
 
-    provider: Optional[OpenRouterProviderPreferences] = None
+    provider: OpenRouterProviderPreferences | None = None
 
 
 class OpenRouterLLMService(OpenAILLMService):
@@ -110,10 +110,10 @@ class OpenRouterLLMService(OpenAILLMService):
     def __init__(
         self,
         *,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
+        api_key: str | None = None,
+        model: str | None = None,
         base_url: str = "https://openrouter.ai/api/v1",
-        settings: Optional[Settings] = None,
+        settings: Settings | None = None,
         **kwargs,
     ):
         """Initialize the OpenRouter LLM service.
@@ -166,7 +166,7 @@ class OpenRouterLLMService(OpenAILLMService):
         logger.debug(f"Creating OpenRouter client with api {base_url}")
         return super().create_client(api_key, base_url, **kwargs)
 
-    def build_chat_completion_params(self, params_from_context: Dict[str, Any]) -> Dict[str, Any]:
+    def build_chat_completion_params(self, params_from_context: dict[str, Any]) -> dict[str, Any]:
         """Builds chat parameters, handling model-specific constraints.
 
         Includes OpenRouter-specific provider preferences for routing control

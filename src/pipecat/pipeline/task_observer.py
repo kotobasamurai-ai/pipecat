@@ -12,7 +12,7 @@ the main pipeline execution.
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from attr import dataclass
 
@@ -61,7 +61,7 @@ class TaskObserver(BaseObserver):
     def __init__(
         self,
         *,
-        observers: Optional[List[BaseObserver]] = None,
+        observers: list[BaseObserver] | None = None,
         task_manager: BaseTaskManager,
         **kwargs,
     ):
@@ -75,7 +75,7 @@ class TaskObserver(BaseObserver):
         super().__init__(**kwargs)
         self._observers = observers or []
         self._task_manager = task_manager
-        self._proxies: Optional[Dict[BaseObserver, Proxy]] = (
+        self._proxies: dict[BaseObserver, Proxy] | None = (
             None  # Becomes a dict after start() is called
         )
 
@@ -129,7 +129,7 @@ class TaskObserver(BaseObserver):
         for proxy in self._proxies.values():
             try:
                 await asyncio.wait_for(proxy.queue.join(), timeout=2.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
         for proxy in self._proxies.values():
@@ -175,7 +175,7 @@ class TaskObserver(BaseObserver):
         proxy = Proxy(queue=queue, task=task, observer=observer)
         return proxy
 
-    def _create_proxies(self, observers: List[BaseObserver]) -> Dict[BaseObserver, Proxy]:
+    def _create_proxies(self, observers: list[BaseObserver]) -> dict[BaseObserver, Proxy]:
         """Create proxies for all observers."""
         proxies = {}
         for observer in observers:
@@ -184,6 +184,8 @@ class TaskObserver(BaseObserver):
         return proxies
 
     async def _send_to_proxy(self, data: Any):
+        if not self._proxies:
+            return
         for proxy in self._proxies.values():
             await proxy.queue.put(data)
 
