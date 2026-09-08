@@ -99,6 +99,7 @@ from pipecat.turns.user_start import (
 from pipecat.turns.user_stop import (
     BaseUserTurnStopStrategy,
     ExternalUserTurnStopStrategy,
+    LLMTurnCompletionUserTurnStopStrategy,
     UserTurnStoppedParams,
 )
 from pipecat.turns.user_turn_completion_mixin import UserTurnCompletionConfig
@@ -716,6 +717,10 @@ class LLMUserAggregator(LLMContextAggregator):
         # surfaces the full turn transcript even when several
         # inferences fire before finalization.
         self._full_user_turn_aggregation: str | None = None
+        # Marker-gated inference leaves the logical turn open until its verdict.
+        # New final transcripts must invalidate that inference before it can
+        # finalize and respond to only a prefix of the user's turn.
+        self._unfinalized_inference_pending = False
 
         # Pair-internal back-reference to the assistant half, set by
         # ``LLMContextAggregatorPair``. Used to enforce causal write
@@ -1157,6 +1162,13 @@ class LLMUserAggregator(LLMContextAggregator):
         if not text.strip():
             return
 
+        if self._unfinalized_inference_pending:
+            self._unfinalized_inference_pending = False
+            logger.debug(f"{self}: continued transcript supersedes unfinalized inference")
+            # No new turn-start interruption is emitted while the turn is open.
+            # Keep prior user segments in context for the next inference.
+            await self.broadcast_interruption()
+
         # In realtime mode with a service that doesn't emit user-turn
         # frames (Gemini Live, AWS Nova Sonic, Ultravox),
         # ``_on_user_turn_started`` never fires, so seed
@@ -1252,6 +1264,12 @@ class LLMUserAggregator(LLMContextAggregator):
 
         logger.debug(f"{self}: User turn inference triggered (strategy: {strategy})")
 
+        if self._aggregation and any(
+            isinstance(stop, LLMTurnCompletionUserTurnStopStrategy)
+            for stop in controller._user_turn_strategies.stop or []
+        ):
+            self._unfinalized_inference_pending = True
+
         # Push aggregation now: this writes the user message segment to
         # the context and emits LLMContextFrame, which kicks LLM
         # inference. Concatenate the segment into
@@ -1275,6 +1293,7 @@ class LLMUserAggregator(LLMContextAggregator):
         strategy: BaseUserTurnStopStrategy,
         params: UserTurnStoppedParams,
     ):
+        self._unfinalized_inference_pending = False
         logger.debug(f"{self}: User stopped speaking (strategy: {strategy})")
 
         if params.enable_user_speaking_frames:
