@@ -8,7 +8,10 @@
 
 from pipecat.frames.frames import Frame, UserTurnInferenceCompletedFrame
 from pipecat.turns.types import ProcessFrameResult
-from pipecat.turns.user_stop.base_user_turn_stop_strategy import BaseUserTurnStopStrategy
+from pipecat.turns.user_stop.base_user_turn_stop_strategy import (
+    BaseUserTurnStopStrategy,
+    PendingTurnSupport,
+)
 
 
 class ExternalUserTurnCompletionStopStrategy(BaseUserTurnStopStrategy):
@@ -47,6 +50,11 @@ class ExternalUserTurnCompletionStopStrategy(BaseUserTurnStopStrategy):
     turn after no activity. Tune that timeout if your producer can
     take longer than the default to respond.
     """
+
+    @property
+    def pending_turn_support(self) -> PendingTurnSupport:
+        """Wait for completion of an admitted turn's inference."""
+        return PendingTurnSupport.COMPLETION
 
     async def process_frame(self, frame: Frame) -> ProcessFrameResult:
         """Fire ``on_user_turn_stopped`` whenever ``UserTurnInferenceCompletedFrame`` is seen."""

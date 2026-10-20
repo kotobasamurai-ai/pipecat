@@ -23,6 +23,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.tests.utils import SleepFrame, run_test
+from pipecat.turns.user_start import BaseAsyncUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_processor import UserTurnProcessor
 from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies, UserTurnStrategies
@@ -32,6 +33,19 @@ TRANSCRIPTION_TIMEOUT = 0.1
 
 
 class TestUserTurnProcessor(unittest.IsolatedAsyncioTestCase):
+    def test_async_admission_requires_aggregator(self):
+        class AsyncStart(BaseAsyncUserTurnStartStrategy):
+            async def decide(self, text: str) -> bool:
+                return False
+
+        with self.assertRaisesRegex(ValueError, "LLMUserAggregatorParams"):
+            UserTurnProcessor(
+                user_turn_strategies=UserTurnStrategies(
+                    start=[AsyncStart()],
+                    stop=[SpeechTimeoutUserTurnStopStrategy()],
+                )
+            )
+
     async def test_default_user_turn_strategies(self):
         user_turn_processor = UserTurnProcessor(
             user_turn_strategies=UserTurnStrategies(

@@ -26,7 +26,11 @@ from pipecat.processors.frame_processor import (
 )
 from pipecat.turns.types import UserTurnSpeculation
 from pipecat.turns.user_idle_controller import UserIdleController
-from pipecat.turns.user_start import BaseUserTurnStartStrategy, UserTurnStartedParams
+from pipecat.turns.user_start import (
+    BaseAsyncUserTurnStartStrategy,
+    BaseUserTurnStartStrategy,
+    UserTurnStartedParams,
+)
 from pipecat.turns.user_stop import BaseUserTurnStopStrategy, UserTurnStoppedParams
 from pipecat.turns.user_turn_controller import UserTurnController
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
@@ -97,6 +101,13 @@ class UserTurnProcessor(FrameProcessor):
         """
         super().__init__(**kwargs)
 
+        strategies = user_turn_strategies or UserTurnStrategies()
+        if any(isinstance(s, BaseAsyncUserTurnStartStrategy) for s in strategies.start or []):
+            raise ValueError(
+                "Asynchronous start strategies require LLMUserAggregator to retain and "
+                "discard pending transcripts; configure them in LLMUserAggregatorParams"
+            )
+
         self._register_event_handler("on_user_turn_started")
         self._register_event_handler("on_user_turn_stopped")
         self._register_event_handler("on_user_turn_stop_timeout")
@@ -104,7 +115,7 @@ class UserTurnProcessor(FrameProcessor):
         self._register_event_handler("on_user_turn_inference_triggered")
 
         self._user_turn_controller = UserTurnController(
-            user_turn_strategies=user_turn_strategies or UserTurnStrategies(),
+            user_turn_strategies=strategies,
             user_turn_stop_timeout=user_turn_stop_timeout,
         )
         self._user_turn_controller.add_event_handler("on_push_frame", self._on_push_frame)

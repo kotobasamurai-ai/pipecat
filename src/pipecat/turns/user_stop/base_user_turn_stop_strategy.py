@@ -7,12 +7,26 @@
 """Base user turn stop strategy for determining when the user stopped speaking."""
 
 from dataclasses import dataclass
+from enum import Enum
 
 from pipecat.frames.frames import Frame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessorSetup
 from pipecat.turns.types import ProcessFrameResult, UserTurnSpeculation
 from pipecat.utils.base_object import BaseObject
 from pipecat.utils.deprecation import warn_deprecated
+
+
+class PendingTurnSupport(Enum):
+    """How a stop strategy participates in asynchronous turn admission.
+
+    OBSERVATION strategies detect speech endings from the first observation and
+    retain their state through admission. COMPLETION strategies are armed at
+    admission to finalize the turn. NONE requires synchronous turn starts.
+    """
+
+    NONE = "none"
+    OBSERVATION = "observation"
+    COMPLETION = "completion"
 
 
 @dataclass
@@ -109,6 +123,11 @@ class BaseUserTurnStopStrategy(BaseObject):
                 "`handle_user_turn_stopped` instead.",
                 stacklevel=3,
             )
+
+    @property
+    def pending_turn_support(self) -> PendingTurnSupport:
+        """Return this strategy's role in asynchronous turn admission."""
+        return PendingTurnSupport.NONE
 
     @property
     def resolves_proposed_turn_stop_frames(self) -> bool:

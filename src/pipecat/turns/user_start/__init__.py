@@ -4,7 +4,9 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
+from .base_async_user_turn_start_strategy import BaseAsyncUserTurnStartStrategy
 from .base_user_turn_start_strategy import BaseUserTurnStartStrategy, UserTurnStartedParams
+from .classifier_user_turn_start_strategy import ClassifierUserTurnStartStrategy
 from .external_user_turn_start_strategy import ExternalUserTurnStartStrategy
 from .min_words_user_turn_start_strategy import MinWordsUserTurnStartStrategy
 from .transcription_user_turn_start_strategy import TranscriptionUserTurnStartStrategy
@@ -17,6 +19,8 @@ except ImportError:
     KrispVivaIPUserTurnStartStrategy = None  # krisp_audio not installed
 
 __all__ = [
+    "ClassifierUserTurnStartStrategy",
+    "BaseAsyncUserTurnStartStrategy",
     "BaseUserTurnStartStrategy",
     "ExternalUserTurnStartStrategy",
     "KrispVivaIPUserTurnStartStrategy",

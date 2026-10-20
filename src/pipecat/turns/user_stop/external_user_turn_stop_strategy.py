@@ -21,7 +21,10 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameProcessorSetup
 from pipecat.turns.types import ProcessFrameResult
-from pipecat.turns.user_stop.base_user_turn_stop_strategy import BaseUserTurnStopStrategy
+from pipecat.turns.user_stop.base_user_turn_stop_strategy import (
+    BaseUserTurnStopStrategy,
+    PendingTurnSupport,
+)
 
 
 class ExternalUserTurnStopStrategy(BaseUserTurnStopStrategy):
@@ -97,6 +100,11 @@ class ExternalUserTurnStopStrategy(BaseUserTurnStopStrategy):
     @wait_for_transcript.setter
     def wait_for_transcript(self, value: bool):
         self._wait_for_transcript = value
+
+    @property
+    def pending_turn_support(self) -> PendingTurnSupport:
+        """Keep observation state when a pending turn is admitted."""
+        return PendingTurnSupport.OBSERVATION
 
     async def handle_user_turn_started(self):
         """Ready the strategy to detect the end of the turn now starting."""
