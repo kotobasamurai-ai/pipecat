@@ -7,8 +7,17 @@
 """Asynchronous admission of observed user speech."""
 
 from abc import abstractmethod
+from enum import Enum
 
 from pipecat.turns.user_start.base_user_turn_start_strategy import BaseUserTurnStartStrategy
+
+
+class UserTurnStartDecision(Enum):
+    """Whether speech needs a turn, is already addressed, or is an acknowledgement."""
+
+    INTERRUPT = "interrupt"
+    CONTINUE = "continue"
+    BACKCHANNEL = "backchannel"
 
 
 class BaseAsyncUserTurnStartStrategy(BaseUserTurnStartStrategy):
@@ -48,6 +57,6 @@ class BaseAsyncUserTurnStartStrategy(BaseUserTurnStartStrategy):
         return True
 
     @abstractmethod
-    async def decide(self, text: str) -> bool:
-        """Return True to admit speech, or False to keep listening for updates."""
+    async def decide(self, text: str) -> bool | UserTurnStartDecision:
+        """Return a decision; True admits speech and False keeps listening for updates."""
         raise NotImplementedError

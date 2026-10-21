@@ -11,7 +11,9 @@ Configure it in `LLMUserAggregatorParams` as the sole start strategy:
 import os
 
 from pipecat.classifiers.typesafe.jev.classifier import JevClassifier
+from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_buffer import LLMResponseBuffer
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
@@ -21,15 +23,16 @@ from pipecat.turns.user_stop import ExternalUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 context = LLMContext()
+response_buffer = LLMResponseBuffer()
 strategies = UserTurnStrategies(
     start=[
         ClassifierUserTurnStartStrategy(
             classifier=JevClassifier(api_key=os.environ["TYPESAFE_API_KEY"]),
             context=lambda: {
                 "conversation": context.get_messages(),
-                "pending_assistant_text": assistant_aggregator.aggregation_string(),
+                "current_assistant_response": response_buffer.text,
             },
-            cooldown=0.3,
+            cooldown=1.5,
             timeout=1.0,
         )
     ],
@@ -41,14 +44,56 @@ user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
 )
 ```
 
-The callback reads the complete committed conversation and the assistant's
-uncommitted text for each decision. It runs after the aggregator pair has been
-constructed, so `assistant_aggregator` is available when the callback executes.
-`aggregation_string()` reads the existing buffer without committing or clearing
-it. This text reflects frames received by the assistant aggregator, rather than
-an exact audio playback position. The strategy copies the supplied state and
-adds the pending user transcript separately. The callback must be fast and
-synchronous. Each strategy owns its classifier connection.
+Place `response_buffer` immediately after the LLM and before TTS in the pipeline:
+
+```python
+pipeline = Pipeline([
+    transport.input(), stt, user_aggregator,
+    llm, response_buffer, tts, transport.output(), assistant_aggregator,
+])
+```
+
+The callback reads the committed conversation and the latest response's generated
+text, including text awaiting synthesis or playback. The buffer survives the end
+of generation and resets on a new response, interruption, or session end. It does
+not predict ungenerated text or indicate what the caller has heard. A new LLM
+generation replaces the buffer, including a generation following a tool call.
+`TTSSpeakFrame` messages passing through it also replace the buffer. Speech from
+other pipeline paths must be supplied by the application if it is to be classified.
+
+The strategy copies the supplied state and adds `user_speech`: accumulated final
+text plus the latest interim. Interim updates replace one another and stay out
+of conversation history. The callback must be fast and synchronous. Each strategy
+owns its classifier connection.
+
+## Classification and conversation history
+
+The default question asks whether a question's answer is explicitly present in
+the current response. Answers to the assistant's questions, selections, and
+consent admit a user turn. Recognition delay does not imply that the caller heard
+an answer. Explicit requests to stop, repeat, or clarify also require yielding.
+
+| Choice | Action at the end of a rejected utterance | LLM context |
+| --- | --- | --- |
+| `backchannel` | Emit `UserBackchannelFrame` with the acknowledgement | Omit |
+| `continue` | Let the current response address the request | Omit |
+| `interrupt` | Admit the turn and apply normal end detection | Add final transcripts |
+
+Both non-interrupt choices remain provisional while speech continues. Applications
+can record each verdict, including its confidence and probabilities:
+
+```python
+start = strategies.start[0]
+
+@start.event_handler("on_classification")
+async def on_classification(strategy, text, result):
+    logger.info("User speech {!r}: {} ({:.2f})", text, result.choice, result.confidence)
+```
+
+Here `start` is the configured `ClassifierUserTurnStartStrategy` instance.
+The event reports a model verdict, not a committed turn action; updated speech,
+bot silence, or a timeout can change the eventual action. A custom `question`
+may change the instructions while preserving the three choice names.
 
 ## Start admission and end detection
 
@@ -92,7 +137,9 @@ from finalizing a different inference.
 - Bot playback ending admits pending text. Session cancellation invalidates
   outstanding decisions and discards unadmitted aggregation.
 
-Confirmed acknowledgements do not enter the LLM conversation context. Applications
+Confirmed acknowledgements are reported through the aggregator's
+`on_user_backchannel` event and RTVI. Requests addressed by the current response
+have a `continue` classification event but no backchannel frame. Applications
 that need a complete transcript can record incoming STT frames separately.
 
 ## Extension boundary
@@ -100,6 +147,9 @@ that need a complete transcript can record incoming STT frames separately.
 Subclass `BaseAsyncUserTurnStartStrategy` to supply another asynchronous decision
 policy. The controller owns candidate state, serialization and end-result
 retention; the strategy supplies `decide(text)` and, optionally, `needs_decision`.
+Return `UserTurnStartDecision` to distinguish acknowledgements from other
+non-interrupting speech. Boolean decisions also work: `True` admits and `False`
+keeps listening without reporting a backchannel.
 
 Stop strategies declare their `pending_turn_support` using `PendingTurnSupport`.
 `OBSERVATION` detectors are armed at the first speech observation and retain their

@@ -21,6 +21,7 @@ from pipecat.frames.frames import (
     ProposedUserStartedSpeakingFrame,
     ProposedUserStoppedSpeakingFrame,
     TranscriptionFrame,
+    UserBackchannelFrame,
     UserTurnInferenceCompletedFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
@@ -28,6 +29,7 @@ from pipecat.frames.frames import (
 from pipecat.turns.types import UserTurnSpeculation
 from pipecat.turns.user_start.base_async_user_turn_start_strategy import (
     BaseAsyncUserTurnStartStrategy,
+    UserTurnStartDecision,
 )
 from pipecat.turns.user_start.base_user_turn_start_strategy import UserTurnStartedParams
 from pipecat.turns.user_stop.base_user_turn_stop_strategy import (
@@ -48,6 +50,9 @@ class _Candidate:
     final_text: str = ""
     revision: int = 0
     rejected_revision: int = -1
+    decision: UserTurnStartDecision | None = None
+    user_id: str = ""
+    timestamp: str = ""
     inferred: tuple[int, int] | None = None  # Text revision and speech activity at inference.
     activity: int = 0
     inference: tuple[BaseUserTurnStopStrategy, UserTurnSpeculation | None] | None = None
@@ -154,6 +159,8 @@ class UserTurnAdmission:
             c.inference = None
             c.stop = None
         if transcript and frame.text.strip():
+            c.user_id = frame.user_id
+            c.timestamp = frame.timestamp
             text = " ".join(part for part in (c.final_text, frame.text) if part)
             if isinstance(frame, TranscriptionFrame):
                 c.final_text = text
@@ -227,12 +234,12 @@ class UserTurnAdmission:
                 try:
                     deadline = asyncio.timeout(self.strategy.timeout)
                     async with deadline:
-                        accept = await self.strategy.decide(text)
+                        decision = await self.strategy.decide(text)
                     if deadline.expired():
-                        accept = True
+                        decision = True
                 except Exception as exc:
                     logger.warning(f"{self.strategy}: admitting speech after {type(exc).__name__}")
-                    accept = True
+                    decision = True
                 if not self.valid(c) or asyncio.current_task() is not self._decision_task:
                     return
                 async with self.transaction():
@@ -242,11 +249,12 @@ class UserTurnAdmission:
                         or self.controller._user_turn
                     ):
                         return
-                    if accept:
+                    if decision is True or decision is UserTurnStartDecision.INTERRUPT:
                         await self._admit(c)
                         await self.flush(c)
                         return
                     c.rejected_revision = revision
+                    c.decision = UserTurnStartDecision.CONTINUE if decision is False else decision
                     await self.flush(c)
                     if c.rejected_revision == c.revision:
                         return
@@ -291,6 +299,14 @@ class UserTurnAdmission:
                         await detector.handle_user_turn_stopped()
                 if not self.closed:
                     await self.controller._call_event_handler("on_reset_aggregation", self.strategy)
+                    if c.decision is UserTurnStartDecision.BACKCHANNEL:
+                        await self.strategy.push_frame(
+                            UserBackchannelFrame(
+                                text=c.final_text or c.text,
+                                user_id=c.user_id,
+                                timestamp=c.timestamp,
+                            )
+                        )
             return
         if c.inference is not None and (c.inferred is None or c.inferred[0] != c.revision):
             c.inferred = (c.revision, c.activity)
