@@ -9,7 +9,10 @@
 from pipecat.frames.frames import Frame
 from pipecat.processors.frame_processor import FrameProcessorSetup
 from pipecat.turns.types import ProcessFrameResult
-from pipecat.turns.user_stop.base_user_turn_stop_strategy import BaseUserTurnStopStrategy
+from pipecat.turns.user_stop.base_user_turn_stop_strategy import (
+    BaseUserTurnStopStrategy,
+    PendingTurnSupport,
+)
 
 
 class DeferredUserTurnStopStrategy(BaseUserTurnStopStrategy):
@@ -45,6 +48,11 @@ class DeferredUserTurnStopStrategy(BaseUserTurnStopStrategy):
     def inner(self) -> BaseUserTurnStopStrategy:
         """Return the wrapped strategy."""
         return self._inner
+
+    @property
+    def pending_turn_support(self) -> PendingTurnSupport:
+        """Preserve the wrapped strategy's role in turn admission."""
+        return self._inner.pending_turn_support
 
     @property
     def resolves_proposed_turn_stop_frames(self) -> bool:

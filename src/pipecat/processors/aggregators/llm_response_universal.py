@@ -527,13 +527,18 @@ class LLMContextAggregator(FrameProcessor):
         """
         return self._context
 
+    @property
+    def _inference_id(self) -> str | None:
+        """Optional correlation for completion of an admitted inference."""
+        return None
+
     def _get_context_frame(self) -> LLMContextFrame:
         """Create a context frame with the current context.
 
         Returns:
             LLMContextFrame containing the current context.
         """
-        return LLMContextFrame(context=self._context)
+        return LLMContextFrame(context=self._context, inference_id=self._inference_id)
 
     async def push_context_frame(self, direction: FrameDirection = FrameDirection.DOWNSTREAM):
         """Push a context frame in the specified direction.
@@ -863,6 +868,20 @@ class LLMUserAggregator(LLMContextAggregator):
             frame: The frame to process.
             direction: The direction of frame flow in the pipeline.
         """
+        ending = isinstance(frame, (CancelFrame, EndFrame))
+        discard = ending and self._user_turn_controller.has_pending_turn
+        if ending:
+            self._user_turn_controller.invalidate_admission()
+        async with self._user_turn_controller.transaction():
+            if discard:
+                await self.reset()
+            await self._process_user_frame(frame, direction)
+
+    @property
+    def _inference_id(self) -> str | None:
+        return self._user_turn_controller.inference_id
+
+    async def _process_user_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
         if await self._maybe_mute_frame(frame):
@@ -1800,6 +1819,11 @@ class LLMAssistantAggregator(LLMContextAggregator):
         self._thought_append_to_context = False
         self._thought_llm = ""
         self._thought_aggregation = []
+
+    @property
+    def _inference_id(self) -> str | None:
+        paired = self._paired_user_aggregator
+        return paired._inference_id if paired else None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process frames for assistant response aggregation and function call management.

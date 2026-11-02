@@ -9,6 +9,7 @@
 from dataclasses import dataclass
 
 from pipecat.turns.user_start import (
+    BaseAsyncUserTurnStartStrategy,
     BaseUserTurnStartStrategy,
     ExternalUserTurnStartStrategy,
     TranscriptionUserTurnStartStrategy,
@@ -20,6 +21,7 @@ from pipecat.turns.user_stop import (
     EagerUserTurnStopStrategy,
     ExternalUserTurnStopStrategy,
     LLMTurnCompletionUserTurnStopStrategy,
+    PendingTurnSupport,
     TurnAnalyzerUserTurnStopStrategy,
     deferred,
 )
@@ -78,6 +80,20 @@ class UserTurnStrategies:
             self.start = default_user_turn_start_strategies()
         if not self.stop:
             self.stop = default_user_turn_stop_strategies()
+        async_starts = [s for s in self.start if isinstance(s, BaseAsyncUserTurnStartStrategy)]
+        if async_starts:
+            if len(self.start) != 1:
+                raise ValueError("An asynchronous start strategy must be the sole start strategy")
+            if not any(s.pending_turn_support is PendingTurnSupport.OBSERVATION for s in self.stop):
+                raise ValueError("Asynchronous admission requires a speech-end detector")
+            unsupported = [
+                type(s).__name__
+                for s in self.stop
+                if s.pending_turn_support
+                not in (PendingTurnSupport.OBSERVATION, PendingTurnSupport.COMPLETION)
+            ]
+            if unsupported:
+                raise ValueError(f"Stop strategies do not support pending turns: {unsupported}")
 
 
 @dataclass

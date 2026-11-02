@@ -762,10 +762,12 @@ class LLMContextFrame(Frame):
             provisional context that is not part of the conversation. Its
             response must not reach the user or the context until the turn is
             confirmed, and the service must not execute tool calls for it.
+        inference_id: Optional inference identifier echoed by completion producers.
     """
 
     context: LLMContext
     speculation: bool = False
+    inference_id: str | None = None
 
 
 @dataclass
@@ -1480,9 +1482,13 @@ class UserTurnInferenceCompletedFrame(SystemFrame):
     finalize the turn. Producers should emit this frame only when they
     judge the turn complete; an absence of this frame means the turn is
     not yet considered complete.
+
+    Parameters:
+        inference_id: Identifier of the inference evaluated by the producer. None
+            preserves completion signaling without turn attribution.
     """
 
-    pass
+    inference_id: str | None = None
 
 
 @dataclass

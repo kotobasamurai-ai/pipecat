@@ -4,7 +4,11 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
-from .base_user_turn_stop_strategy import BaseUserTurnStopStrategy, UserTurnStoppedParams
+from .base_user_turn_stop_strategy import (
+    BaseUserTurnStopStrategy,
+    PendingTurnSupport,
+    UserTurnStoppedParams,
+)
 from .deferred_user_turn_stop_strategy import DeferredUserTurnStopStrategy, deferred
 from .eager_match_policy import EagerMatchPolicy, ExactMatch, NormalizedMatch
 from .eager_user_turn_stop_strategy import EagerUserTurnStopStrategy
@@ -24,6 +28,7 @@ __all__ = [
     "ExternalUserTurnStopStrategy",
     "LLMTurnCompletionUserTurnStopStrategy",
     "NormalizedMatch",
+    "PendingTurnSupport",
     "SpeechTimeoutUserTurnStopStrategy",
     "UserTurnStoppedParams",
     "TurnAnalyzerUserTurnStopStrategy",

@@ -13,6 +13,7 @@ were interrupted mid-thought.
 """
 
 import asyncio
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 
@@ -22,6 +23,7 @@ from pipecat.frames.frames import (
     Frame,
     FunctionCallsStartedFrame,
     InterruptionFrame,
+    LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMMarkerFrame,
@@ -272,6 +274,11 @@ class UserTurnCompletionLLMServiceMixin(FrameProcessor):
             **kwargs: Keyword arguments passed to parent class.
         """
         super().__init__(*args, **kwargs)
+        # Inference tasks inherit their own attribution even if a later context
+        # reaches this service while an earlier response is still finishing.
+        self._completion_inference_id: ContextVar[str | None] = ContextVar(
+            "completion_inference_id", default=None
+        )
         self._turn_text_buffer = ""
         # The current response as the LLM produced it, and the marker read
         # from it, reported together when the response ends.
@@ -333,7 +340,9 @@ class UserTurnCompletionLLMServiceMixin(FrameProcessor):
         if self._turn_completion_broadcasted:
             return
         self._turn_completion_broadcasted = True
-        await self.broadcast_frame(UserTurnInferenceCompletedFrame)
+        await self.broadcast_frame(
+            UserTurnInferenceCompletedFrame, inference_id=self._completion_inference_id.get()
+        )
 
     async def _start_incomplete_timeout(self, incomplete_type: IncompleteType):
         """Start a timeout task for incomplete turn handling.
@@ -425,8 +434,14 @@ class UserTurnCompletionLLMServiceMixin(FrameProcessor):
             frame: The frame to process.
             direction: The direction of frame processing.
         """
+        if isinstance(frame, LLMContextFrame):
+            self._completion_inference_id.set(frame.inference_id)
+            if frame.inference_id is not None:
+                # Admission already coalesces duplicate detector readiness.
+                # Each emitted context may voice its own response.
+                self._user_turn_completion_voiced = False
         # Handle interruptions by cancelling timeout and resetting state
-        if isinstance(frame, InterruptionFrame):
+        elif isinstance(frame, InterruptionFrame):
             await self._cancel_incomplete_timeout()
             await self._turn_reset()
             self._user_turn_completion_voiced = False

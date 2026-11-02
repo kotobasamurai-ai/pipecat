@@ -7,8 +7,11 @@
 """This module defines a controller for managing user turn lifecycle."""
 
 import asyncio
+from contextlib import asynccontextmanager
 
 from pipecat.frames.frames import (
+    CancelFrame,
+    EndFrame,
     Frame,
     InterimTranscriptionFrame,
     ProposedUserStartedSpeakingFrame,
@@ -16,12 +19,14 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
+    UserTurnInferenceCompletedFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessorSetup
 from pipecat.turns.types import ProcessFrameResult, UserTurnSpeculation
 from pipecat.turns.user_start import (
+    BaseAsyncUserTurnStartStrategy,
     BaseUserTurnStartStrategy,
     UserTurnStartedParams,
 )
@@ -29,6 +34,8 @@ from pipecat.turns.user_stop import (
     BaseUserTurnStopStrategy,
     UserTurnStoppedParams,
 )
+from pipecat.turns.user_stop.base_user_turn_stop_strategy import PendingTurnSupport
+from pipecat.turns.user_turn_admission import UserTurnAdmission
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.utils.base_object import BaseObject
 
@@ -99,6 +106,8 @@ class UserTurnController(BaseObject):
         super().__init__()
 
         self._user_turn_strategies = user_turn_strategies
+        self._admission: UserTurnAdmission | None = None
+        self._configure_admission()
         self._user_turn_stop_timeout = user_turn_stop_timeout
         self._setup: FrameProcessorSetup | None = None
 
@@ -116,6 +125,39 @@ class UserTurnController(BaseObject):
         self._register_event_handler("on_user_turn_stopped", sync=True)
         self._register_event_handler("on_user_turn_stop_timeout", sync=True)
         self._register_event_handler("on_reset_aggregation", sync=True)
+
+    def _configure_admission(self):
+        strategies = self._user_turn_strategies.start or []
+        strategy = strategies[0] if strategies else None
+        self._admission = (
+            UserTurnAdmission(self, strategy)
+            if isinstance(strategy, BaseAsyncUserTurnStartStrategy)
+            else None
+        )
+
+    @property
+    def inference_id(self) -> str | None:
+        """Correlation token for the latest admitted inference, when enabled."""
+        return self._admission.inference_id if self._admission else None
+
+    @property
+    def has_pending_turn(self) -> bool:
+        """Whether aggregation belongs to speech not yet admitted."""
+        return bool(self._admission and self._admission.candidate and not self._user_turn)
+
+    def invalidate_admission(self):
+        """Invalidate asynchronous results before cancellation waits for callbacks."""
+        if self._admission:
+            self._admission.invalidate()
+
+    @asynccontextmanager
+    async def transaction(self):
+        """Include aggregation in admission's serialized state transitions."""
+        if self._admission:
+            async with self._admission.transaction():
+                yield
+        else:
+            yield
 
     @property
     def user_turn_strategies(self) -> UserTurnStrategies:
@@ -141,6 +183,10 @@ class UserTurnController(BaseObject):
 
         Paired with :meth:`stop`.
         """
+        if self._admission and self._admission.closed:
+            self._user_turn = False
+            self._user_speaking = False
+            self._configure_admission()
         if not self._user_turn_stop_timeout_task:
             self._user_turn_stop_timeout_task = self.create_task(
                 self._user_turn_stop_timeout_task_handler()
@@ -152,6 +198,8 @@ class UserTurnController(BaseObject):
         Called at session end. The strategies may be shared, so cleaning
         them up waits for :meth:`cleanup`.
         """
+        if self._admission:
+            await self._admission.cleanup()
         if self._user_turn_stop_timeout_task:
             await self.cancel_task(self._user_turn_stop_timeout_task)
             self._user_turn_stop_timeout_task = None
@@ -170,8 +218,11 @@ class UserTurnController(BaseObject):
         Args:
             strategies: The new user turn strategies the controller should use.
         """
+        if self._admission:
+            await self._admission.cleanup()
         await self._cleanup_strategies()
         self._user_turn_strategies = strategies
+        self._configure_admission()
         await self._setup_strategies()
 
     @property
@@ -208,7 +259,17 @@ class UserTurnController(BaseObject):
             frame: The frame to be processed.
 
         """
-        if isinstance(frame, (UserStartedSpeakingFrame, ProposedUserStartedSpeakingFrame)):
+        if isinstance(frame, (CancelFrame, EndFrame)):
+            self.invalidate_admission()
+        async with self.transaction():
+            if self._admission and self._admission.closed:
+                return
+            await self._process_frame(frame)
+
+    async def _process_frame(self, frame: Frame):
+        if self._admission:
+            await self._admission.observe(frame)
+        elif isinstance(frame, (UserStartedSpeakingFrame, ProposedUserStartedSpeakingFrame)):
             await self._handle_user_started_speaking(frame)
         elif isinstance(frame, (UserStoppedSpeakingFrame, ProposedUserStoppedSpeakingFrame)):
             await self._handle_user_stopped_speaking(frame)
@@ -225,9 +286,15 @@ class UserTurnController(BaseObject):
                 break
 
         for strategy in self._user_turn_strategies.stop or []:
+            if self._admission:
+                if isinstance(frame, UserTurnInferenceCompletedFrame):
+                    if not self._admission.accepts_completion(frame):
+                        continue
             result = await strategy.process_frame(frame)
             if result == ProcessFrameResult.STOP:
                 break
+        if self._admission:
+            await self._admission.advance()
 
     async def _setup_strategies(self):
         if not self._setup:
@@ -336,12 +403,18 @@ class UserTurnController(BaseObject):
     async def _on_user_turn_inference_triggered(
         self, strategy: BaseUserTurnStopStrategy, speculation: UserTurnSpeculation | None
     ):
-        await self._trigger_user_turn_inference_triggered(strategy, speculation)
+        if self._admission:
+            await self._admission.inference(strategy, speculation)
+        else:
+            await self._trigger_user_turn_inference_triggered(strategy, speculation)
 
     async def _on_user_turn_stopped(
         self, strategy: BaseUserTurnStopStrategy, params: UserTurnStoppedParams
     ):
-        await self._trigger_user_turn_stop(strategy, params)
+        if self._admission:
+            await self._admission.stopped(strategy, params)
+        else:
+            await self._trigger_user_turn_stop(strategy, params)
 
     async def _on_reset_aggregation(self, strategy: BaseUserTurnStartStrategy):
         await self._call_event_handler("on_reset_aggregation", strategy)
@@ -349,22 +422,17 @@ class UserTurnController(BaseObject):
     async def _trigger_user_turn_start(
         self, strategy: BaseUserTurnStartStrategy | None, params: UserTurnStartedParams
     ):
-        # Prevent two consecutive user turn starts.
-        if self._user_turn:
+        if self._user_turn or (self._admission and self._admission.closed):
             return
-
         self._user_turn = True
         self._user_turn_stop_timeout_event.set()
-
-        # Notify every strategy that the turn has started. Start strategies
-        # ready themselves for the next detection; stop strategies arm to detect
-        # this turn's end. A strategy resets whatever per-turn state it keeps
-        # inside its own handle_user_turn_started.
         for s in self._user_turn_strategies.start or []:
             await s.handle_user_turn_started()
         for s in self._user_turn_strategies.stop or []:
-            await s.handle_user_turn_started()
-
+            if not self._admission or s.pending_turn_support == PendingTurnSupport.COMPLETION:
+                await s.handle_user_turn_started()
+        if self._admission and self._admission.closed:
+            return
         await self._call_event_handler("on_user_turn_started", strategy, params)
 
     async def _trigger_user_turn_inference_triggered(
@@ -374,7 +442,7 @@ class UserTurnController(BaseObject):
     ):
         # Inference-triggered fires only while a turn is active. The turn
         # remains active afterward — only `on_user_turn_stopped` flips state.
-        if not self._user_turn:
+        if not self._user_turn or (self._admission and self._admission.closed):
             return
 
         # Re-arm the stop watchdog so a stuck turn (inference fired but
@@ -387,7 +455,7 @@ class UserTurnController(BaseObject):
         self, strategy: BaseUserTurnStopStrategy | None, params: UserTurnStoppedParams
     ):
         # Prevent two consecutive user turn stops.
-        if not self._user_turn:
+        if not self._user_turn or (self._admission and self._admission.closed):
             return
 
         # Never finalize while the user is audibly speaking. A stop strategy can
@@ -412,6 +480,10 @@ class UserTurnController(BaseObject):
         for s in self._user_turn_strategies.stop or []:
             await s.handle_user_turn_stopped()
 
+        if self._admission:
+            if self._admission.closed:
+                return
+            self._admission.finished()
         await self._call_event_handler("on_user_turn_stopped", strategy, params)
 
     async def _user_turn_stop_timeout_task_handler(self):
@@ -423,8 +495,11 @@ class UserTurnController(BaseObject):
                 )
                 self._user_turn_stop_timeout_event.clear()
             except TimeoutError:
-                if self._user_turn and not self._user_speaking:
-                    await self._call_event_handler("on_user_turn_stop_timeout")
-                    await self._trigger_user_turn_stop(
-                        None, UserTurnStoppedParams(enable_user_speaking_frames=True)
-                    )
+                async with self.transaction():
+                    if self._user_turn and not self._user_speaking:
+                        if self._admission and self._admission.closed:
+                            continue
+                        await self._call_event_handler("on_user_turn_stop_timeout")
+                        await self._trigger_user_turn_stop(
+                            None, UserTurnStoppedParams(enable_user_speaking_frames=True)
+                        )
